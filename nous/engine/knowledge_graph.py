@@ -9,6 +9,7 @@ from itertools import combinations
 import networkx as nx
 
 from nous.engine.connector import cosine_sim, nous_score
+from nous.engine.structure import structural_sim
 
 
 def build_graph_from(
@@ -17,9 +18,13 @@ def build_graph_from(
     metadatas: list[dict],
     threshold: float = 0.25,
     max_edges_per_node: int = 6,
+    structures: dict[str, dict] | None = None,
 ) -> nx.Graph:
     """
     Pure graph construction (no I/O).
+
+    `structures` ({id: {"embedding", "motifs"}}) blends structural similarity into the
+    edge score for pairs where both articles have a structural abstraction.
 
     Node attributes: title, domain, centrality
     Edge attributes: weight   (nous_score — higher = more similar)
@@ -37,7 +42,11 @@ def build_graph_from(
             continue
 
         sim = cosine_sim(embeddings[i_idx], embeddings[j_idx])
-        score = nous_score(sim, same_domain=False)
+        st_sim = None
+        if structures and i_id in structures and j_id in structures:
+            a, b = structures[i_id], structures[j_id]
+            st_sim = structural_sim(a["embedding"], a["motifs"], b["embedding"], b["motifs"])
+        score = nous_score(sim, same_domain=False, structural_sim=st_sim)
 
         if score >= threshold:
             edge_candidates[i_id].append((score, j_id))
@@ -70,6 +79,7 @@ def build_graph(threshold: float = 0.25, max_edges_per_node: int = 6) -> nx.Grap
         max_edges_per_node:  Limit edges per node to keep graph readable.
     """
     from nous.engine.embedder import get_collection
+    from nous.engine.structure import load_structures
 
     collection = get_collection()
     result = collection.get(include=["embeddings", "metadatas"])
@@ -78,9 +88,12 @@ def build_graph(threshold: float = 0.25, max_edges_per_node: int = 6) -> nx.Grap
     if not ids:
         raise RuntimeError("ChromaDB is empty — run 'python nous.py embed' first.")
 
-    print(f"Computing edges for {len(ids)} nodes...")
+    structures = load_structures()
+    print(f"Computing edges for {len(ids)} nodes "
+          f"({len(structures)} with structural abstractions)...")
     G = build_graph_from(ids, result["embeddings"], result["metadatas"],
-                         threshold=threshold, max_edges_per_node=max_edges_per_node)
+                         threshold=threshold, max_edges_per_node=max_edges_per_node,
+                         structures=structures)
     print(f"Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
     return G
 

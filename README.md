@@ -23,6 +23,38 @@ python nous.py debate "concept"    # 5 Scepter 討論 + NOUS 統合
 python nous.py memory | link | network | sync | debates
 ```
 
+### 構造抽象化（structural_sim）
+
+```bash
+python nous.py abstract [limit]    # 各記事を「分野語を使わない構造記述 + モチーフ」に変換
+```
+
+一度作ると `query` / `hyp` / `debate` / `graph` が自動で構造類似度を併用する
+（`nous_score = 0.4 × 意味類似 + 0.6 × 構造類似`、構造類似 = 0.5 × 構造記述の埋め込み類似 + 0.5 × モチーフJaccard）。
+
+### 仮説の評価
+
+```bash
+python nous.py evaluate            # 5つのScepter視点のLLM審査員がルーブリック(1-5)で採点 + 埋め込み新規性
+python nous.py rate <name>         # 人間が同じルーブリックで採点
+python nous.py scores              # 総合点ランキング
+python nous.py reliability         # 審査員間一致度 ICC(2,1)/ICC(2,k)/ICC(3,1)
+```
+
+ルーブリック: novelty / testability / specificity / coherence / structural_depth。
+
+### OpenAlex（26分野・約3億件の学術文献）
+
+```bash
+export OPENALEX_API_KEY=...        # 無料キー（https://openalex.org/settings/api）で $1/日
+python nous.py openalex [n]        # 各分野の被引用上位 + 直近の論文を収集
+python nous.py voids --refresh     # 分野ペアの共起 lift → 文献に基づく Void Zone
+python nous.py fillvoids --openalex  # Void ペアを実際に架橋している希少な論文を収集
+python nous.py trends              # 各分野の年次成長率と加速度
+```
+
+一通り実行しても API 費用は数セント程度（list/group_by は 1 回 $0.0001）。
+
 データは `data/`（SQLite・ChromaDB・raw テキスト・グラフHTML）に保存され、Git 管理外。
 
 ## 構成
@@ -35,6 +67,9 @@ python nous.py memory | link | network | sync | debates
 | `nous/collector/` | Wikipedia / arXiv 収集 |
 | `nous/engine/` | 埋め込み・分野横断検索・知識グラフ・仮説生成 |
 | `nous/scepter/` | 5 つの分野エージェント（H/S/N/A/I） |
+| `nous/engine/structure.py` | 構造抽象化・モチーフ語彙・structural_sim |
+| `nous/evaluation/` | ルーブリック・LLM審査・新規性・ICC |
+| `nous/collector/openalex.py` | OpenAlex 収集・分野共起・分野トレンド |
 | `nous/core.py` | 討論オーケストレーション |
 | `nous/memory/` | 仮説の保存・リンク・ChromaDB への還流 |
 | `nous/output/` | テキスト / pyvis 可視化 |

@@ -177,7 +177,7 @@ def debate(
     # Step 1: retrieve cross-domain context
     if verbose:
         print("[NOUS] Retrieving cross-domain context...")
-    context = find_cross_domain_connections(query, n_results=12)
+    context = find_cross_domain_connections(query, n_results=12, llm_model=model)
 
     # Step 2: each Scepter generates its hypothesis
     hypotheses: list[dict] = []

@@ -49,31 +49,66 @@ def rank_cross_domain(
     embeddings: list[list[float]],
     source_domain: str | None = None,
     n_results: int = 10,
+    ids: list[str] | None = None,
+    structural_sims: dict[str, float] | None = None,
 ) -> list[dict]:
     """
     Re-rank retrieved candidates by nous_score.
     Candidates from `source_domain` (inferred when not given) are penalized so that
     results from *other* domains rise to the top.
+    `structural_sims` ({id: sim}) blends in structural similarity for candidates that
+    have a structural abstraction; the others are scored semantically.
     """
+    ids = ids or [str(i) for i in range(len(documents))]
+    structural_sims = structural_sims or {}
     candidates = [
         {
+            "id":           doc_id,
             "title":        meta["title"],
             "domain":       meta["domain"],
             "semantic_sim": cosine_sim(query_embedding, emb),
+            "structural_sim": structural_sims.get(doc_id),
             "summary":      doc[:300],
         }
-        for doc, meta, emb in zip(documents, metadatas, embeddings)
+        for doc_id, doc, meta, emb in zip(ids, documents, metadatas, embeddings)
     ]
     if source_domain is None:
         source_domain = infer_source_domain(candidates)
 
     for c in candidates:
         c["same_domain"] = source_domain is not None and c["domain"] == source_domain
-        c["nous_score"]  = nous_score(c["semantic_sim"], same_domain=c["same_domain"])
+        c["nous_score"]  = nous_score(c["semantic_sim"], same_domain=c["same_domain"],
+                                      structural_sim=c["structural_sim"])
         c["source_domain"] = source_domain
 
     candidates.sort(key=lambda x: x["nous_score"], reverse=True)
     return candidates[:n_results]
+
+
+def _structural_candidates(query: str, model, n: int, llm_model: str | None):
+    """
+    Abstract the query into a domain-free structure and retrieve structurally similar
+    articles. Returns ((query_embedding, query_motifs), [candidate ids]), or
+    (None, []) when the structure index is empty or the LLM is unavailable.
+    """
+    from nous.config import DEFAULT_MODEL
+    from nous.engine.structure import abstract_structure, get_struct_collection
+    try:
+        col = get_struct_collection()
+        if col.count() == 0:
+            return None, []
+        q = abstract_structure(query, model=llm_model or DEFAULT_MODEL)
+        if not q["structure"]:
+            return None, []
+        q_emb = model.encode(q["structure"]).tolist()
+        raw = col.query(query_embeddings=[q_emb], n_results=min(n, col.count()),
+                        include=[])
+        hit_ids = raw["ids"][0]
+    except Exception as ex:
+        print(f"  [structural search skipped: {ex}]")
+        return None, []
+
+    return (q_emb, q["motifs"]), hit_ids
 
 
 def find_cross_domain_connections(
@@ -81,6 +116,8 @@ def find_cross_domain_connections(
     source_domain: str | None = None,
     target_domain: str | None = None,
     n_results: int = 10,
+    structural: bool = True,
+    llm_model: str | None = None,
 ) -> list[dict]:
     """
     Given a concept (query), find the most structurally resonant concepts
@@ -93,10 +130,15 @@ def find_cross_domain_connections(
         target_domain: If set, only return results from this domain.
         n_results:     Number of results to return (3x candidates are retrieved
                        before reranking).
+        structural:    Also retrieve by structural abstraction when a structure index
+                       exists (built with 'nous.py abstract'); needs Ollama.
 
     Returns:
-        List of dicts with title, domain, nous_score, semantic_sim, summary.
+        List of dicts with id, title, domain, nous_score, semantic_sim,
+        structural_sim, summary.
     """
+    from nous.engine.structure import load_structures, structural_sim
+
     model = get_model()
     collection = get_collection()
 
@@ -116,14 +158,29 @@ def find_cross_domain_connections(
         include=["documents", "metadatas", "embeddings"],
         **kwargs,
     )
+    ids   = list(raw["ids"][0])
+    docs  = list(raw["documents"][0])
+    metas = list(raw["metadatas"][0])
+    embs  = [list(e) for e in raw["embeddings"][0]]
+
+    struct_sims: dict[str, float] = {}
+    if structural:
+        q_info, hit_ids = _structural_candidates(query, model, n_results * 3, llm_model)
+        if q_info is not None:
+            extra = [i for i in hit_ids if i not in set(ids)]
+            if extra:
+                got = collection.get(ids=extra, include=["documents", "metadatas", "embeddings"])
+                for i, d, m, e in zip(got["ids"], got["documents"], got["metadatas"], got["embeddings"]):
+                    if target_domain is None or m["domain"] == target_domain:
+                        ids.append(i); docs.append(d); metas.append(m); embs.append(list(e))
+            q_emb, q_motifs = q_info
+            for doc_id, st in load_structures(ids).items():
+                struct_sims[doc_id] = structural_sim(q_emb, q_motifs, st["embedding"], st["motifs"])
 
     return rank_cross_domain(
-        query_embedding,
-        raw["documents"][0],
-        raw["metadatas"][0],
-        raw["embeddings"][0],
-        source_domain=source_domain,
-        n_results=n_results,
+        query_embedding, docs, metas, embs,
+        source_domain=source_domain, n_results=n_results,
+        ids=ids, structural_sims=struct_sims,
     )
 
 

@@ -96,7 +96,7 @@ def test_every_collector_domain_maps_to_a_real_scepter():
         assert s in SCEPTER_MAP, d
     assert scepter_for("psychology") == "Scepter-H"
     assert "physics" in domains_for("Scepter-N")
-    assert SCEPTER_MAP["Scepter-S"].collector_domains == ["economics", "sociology"]
+    assert {"economics", "sociology", "social_sciences"} <= set(SCEPTER_MAP["Scepter-S"].collector_domains)
 
 
 # ---------------- LLM JSON parsing ---------------- #

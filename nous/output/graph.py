@@ -25,6 +25,20 @@ DOMAIN_COLORS = {
 }
 DEFAULT_COLOR = "#aaaaaa"
 
+# Fallback for domains without their own color (e.g. OpenAlex fields): color by Scepter
+SCEPTER_COLORS = {
+    "Scepter-H": "#9b59b6",
+    "Scepter-S": "#f39c12",
+    "Scepter-N": "#3498db",
+    "Scepter-A": "#34495e",
+    "Scepter-I": "#2ecc71",
+}
+
+
+def domain_color(domain: str) -> str:
+    from nous.domains import scepter_for
+    return DOMAIN_COLORS.get(domain) or SCEPTER_COLORS.get(scepter_for(domain), DEFAULT_COLOR)
+
 PYVIS_OPTIONS = """{
   "physics": {
     "barnesHut": {
@@ -58,7 +72,7 @@ def _try_pyvis():
 def _add_nodes_edges(net, G: nx.Graph, highlight_ids: set | None = None):
     for node_id, data in G.nodes(data=True):
         domain = data.get("domain", "unknown")
-        color  = DOMAIN_COLORS.get(domain, DEFAULT_COLOR)
+        color  = domain_color(domain)
         size   = 15 + data.get("centrality", 0) * 80
 
         if highlight_ids and node_id in highlight_ids:
@@ -128,7 +142,7 @@ def render_query_graph(
 
     for r in connections:
         domain = r.get("domain", "unknown")
-        color  = DOMAIN_COLORS.get(domain, DEFAULT_COLOR)
+        color  = domain_color(domain)
         score  = r.get("nous_score", 0.3)
         net.add_node(
             r["title"],
@@ -158,7 +172,9 @@ def render_text(connections: list[dict], query: str) -> str:
         lines.append(f"[{domain.upper()}]")
         for item in items:
             score = item.get("nous_score", 0)
-            lines.append(f"  • {item['title']}  (nous_score: {score:.3f})")
+            st = item.get("structural_sim")
+            st_s = f", structural: {st:.3f}" if st is not None else ""
+            lines.append(f"  • {item['title']}  (nous_score: {score:.3f}{st_s})")
             lines.append(f"    {item.get('summary','')[:120]}...")
         lines.append("")
 

@@ -18,6 +18,36 @@ DOMAIN_TO_SCEPTER: dict[str, str] = {
     "computer_science": "Scepter-A",
 }
 
+# OpenAlex's 26 fields (slugified display names) -> Scepter
+DOMAIN_TO_SCEPTER.update({
+    "arts_and_humanities":                          "Scepter-H",
+    "psychology":                                   "Scepter-H",
+    "social_sciences":                              "Scepter-S",
+    "economics_econometrics_and_finance":           "Scepter-S",
+    "business_management_and_accounting":           "Scepter-S",
+    "decision_sciences":                            "Scepter-S",
+    "mathematics":                                  "Scepter-N",
+    "physics_and_astronomy":                        "Scepter-N",
+    "chemistry":                                    "Scepter-N",
+    "earth_and_planetary_sciences":                 "Scepter-N",
+    "agricultural_and_biological_sciences":         "Scepter-N",
+    "biochemistry_genetics_and_molecular_biology":  "Scepter-N",
+    "immunology_and_microbiology":                  "Scepter-N",
+    "neuroscience":                                 "Scepter-N",
+    "computer_science":                             "Scepter-A",
+    "engineering":                                  "Scepter-A",
+    "chemical_engineering":                         "Scepter-A",
+    "materials_science":                            "Scepter-A",
+    "energy":                                       "Scepter-A",
+    "medicine":                                     "Scepter-A",
+    "dentistry":                                    "Scepter-A",
+    "nursing":                                      "Scepter-A",
+    "pharmacology_toxicology_and_pharmaceutics":    "Scepter-A",
+    "health_professions":                           "Scepter-A",
+    "veterinary":                                   "Scepter-A",
+    "environmental_science":                        "Scepter-I",
+})
+
 HYPOTHESIS_DOMAIN = "hypothesis"
 
 

@@ -14,6 +14,21 @@ Usage:
     python nous.py sync                # Sync hypotheses back into knowledge base
     python nous.py debate "concept"    # Run full 5-Scepter debate + NOUS synthesis
     python nous.py debates             # Show recent debate sessions
+
+  Structure (domain-free abstractions; requires Ollama)
+    python nous.py abstract [limit]    # Abstract indexed articles into structures + motifs
+
+  Evaluation
+    python nous.py evaluate [model]    # Score all hypotheses with 5 LLM judges + novelty
+    python nous.py rate <name>         # Rate hypotheses yourself with the same rubric
+    python nous.py scores              # Ranking of hypotheses
+    python nous.py reliability         # Inter-rater agreement (ICC) per rubric item
+
+  OpenAlex (set OPENALEX_API_KEY; free key gives $1/day)
+    python nous.py openalex [n]        # Collect n cited + n recent works from each of 26 fields
+    python nous.py voids [--refresh]   # Literature-grounded void zones between fields (lift)
+    python nous.py fillvoids --openalex  # Collect works bridging the strongest void pairs
+    python nous.py trends              # Growth & acceleration of each field
 """
 import sys
 
@@ -31,7 +46,11 @@ def cmd_collect():
     arxiv_collect()
 
 
-def cmd_fillvoids():
+def cmd_fillvoids(openalex: bool = False):
+    if openalex:
+        from nous.collector.openalex import collect_void_bridges
+        collect_void_bridges()
+        return
     from nous.collector.wikipedia import collect_void_bridges as wiki_bridges
     from nous.collector.arxiv import collect_void_bridges as arxiv_bridges
     print("=== Wikipedia bridge articles ===")
@@ -127,6 +146,59 @@ def cmd_debates():
     show_debates()
 
 
+def cmd_abstract(limit: int | None = None, model: str = DEFAULT_MODEL):
+    from nous.engine.structure import build_structure_index
+    build_structure_index(model=model, limit=limit)
+
+
+def cmd_evaluate(model: str = DEFAULT_MODEL):
+    from nous.evaluation.runner import evaluate, print_scores
+    n = evaluate(model=model)
+    print(f"\n{n} new judge ratings stored.")
+    print_scores()
+
+
+def cmd_rate(name: str):
+    from nous.evaluation.runner import human_rate
+    human_rate(name)
+
+
+def cmd_scores():
+    from nous.evaluation.runner import print_scores
+    print_scores()
+
+
+def cmd_reliability(prefix: str | None = None):
+    from nous.evaluation.runner import print_reliability
+    print_reliability(prefix)
+
+
+def cmd_openalex(per_field: int = 20):
+    from nous.collector.openalex import collect_fields
+    collect_fields(per_field=per_field)
+
+
+def cmd_voids(refresh: bool = False, top: int = 20):
+    from nous.collector.openalex import field_cooccurrence, load_field_links
+    if refresh or not load_field_links():
+        print("Computing field co-occurrence across OpenAlex...")
+        field_cooccurrence()
+    links = load_field_links()
+    print("\n=== LITERATURE VOID ZONES (lowest lift = fields that rarely meet) ===\n")
+    for l in links[:top]:
+        print(f"  lift={l['lift']:.3f}  obs={l['observed']:>9,}  "
+              f"{l['name_a']}  ×  {l['name_b']}")
+    print("\n=== HIGHWAYS (highest lift) ===\n")
+    for l in links[-5:][::-1]:
+        print(f"  lift={l['lift']:.3f}  obs={l['observed']:>9,}  "
+              f"{l['name_a']}  ×  {l['name_b']}")
+
+
+def cmd_trends():
+    from nous.collector.openalex import field_trends
+    field_trends()
+
+
 def main():
     args = sys.argv[1:]
     if not args:
@@ -138,7 +210,7 @@ def main():
     if cmd == "collect":
         cmd_collect()
     elif cmd == "fillvoids":
-        cmd_fillvoids()
+        cmd_fillvoids(openalex="--openalex" in args)
     elif cmd == "embed":
         cmd_embed()
     elif cmd == "query":
@@ -173,6 +245,27 @@ def main():
         cmd_debate(args[1], model)
     elif cmd == "debates":
         cmd_debates()
+    elif cmd == "abstract":
+        limit = int(args[1]) if len(args) > 1 else None
+        cmd_abstract(limit)
+    elif cmd == "evaluate":
+        model = args[1] if len(args) > 1 else DEFAULT_MODEL
+        cmd_evaluate(model)
+    elif cmd == "rate":
+        if len(args) < 2:
+            print("Usage: python nous.py rate <your-name>")
+            return
+        cmd_rate(args[1])
+    elif cmd == "scores":
+        cmd_scores()
+    elif cmd == "reliability":
+        cmd_reliability(args[1] if len(args) > 1 else None)
+    elif cmd == "openalex":
+        cmd_openalex(int(args[1]) if len(args) > 1 else 20)
+    elif cmd == "voids":
+        cmd_voids(refresh="--refresh" in args)
+    elif cmd == "trends":
+        cmd_trends()
     else:
         print(f"Unknown command: {cmd}")
         print(__doc__)

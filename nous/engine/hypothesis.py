@@ -51,7 +51,7 @@ def generate_hypothesis(
     n_connections: int = 8,
     save: bool = True,
 ) -> dict:
-    connections = find_cross_domain_connections(query, n_results=n_connections)
+    connections = find_cross_domain_connections(query, n_results=n_connections, llm_model=model)
     bridges     = find_bridge(query, connections[0]["title"] if connections else query, n=4)
 
     prompt = build_prompt(query, connections, bridges)

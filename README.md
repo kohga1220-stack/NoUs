@@ -4,6 +4,10 @@
 
 ## セットアップ
 
+Google Colab で動かす場合は `notebooks/nous_colab.ipynb` を開いて上から実行（PC のメモリを使わない）。
+
+### ローカル
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt

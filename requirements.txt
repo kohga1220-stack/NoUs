@@ -1,0 +1,7 @@
+requests
+numpy
+networkx
+chromadb
+sentence-transformers
+ollama
+pyvis

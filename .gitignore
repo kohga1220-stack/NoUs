@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime data (SQLite, ChromaDB, raw texts, rendered graphs)
+data/
+lib/

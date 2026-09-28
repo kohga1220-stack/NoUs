@@ -20,15 +20,20 @@ Usage:
 
   Evaluation
     python nous.py evaluate [model]    # Score all hypotheses with 5 LLM judges + novelty
+    python nous.py evaluate --judges m1,m2,m3   # Use several different models as judges
     python nous.py rate <name>         # Rate hypotheses yourself with the same rubric
     python nous.py scores              # Ranking of hypotheses
-    python nous.py reliability         # Inter-rater agreement (ICC) per rubric item
+    python nous.py reliability         # Inter-rater agreement (ICC): LLM judges, and human vs. LLM
+    python nous.py litcheck            # Compare each hypothesis with the closest OpenAlex papers
 
   OpenAlex (set OPENALEX_API_KEY; free key gives $1/day)
     python nous.py openalex [n]        # Collect n cited + n recent works from each of 26 fields
     python nous.py voids [--refresh]   # Literature-grounded void zones between fields (lift)
     python nous.py fillvoids --openalex  # Collect works bridging the strongest void pairs
     python nous.py trends              # Growth & acceleration of each field
+
+  Maintenance
+    python nous.py migrate-domains     # Rename legacy domains (physics, ...) to OpenAlex fields
 """
 import sys
 
@@ -151,11 +156,21 @@ def cmd_abstract(limit: int | None = None, model: str = DEFAULT_MODEL):
     build_structure_index(model=model, limit=limit)
 
 
-def cmd_evaluate(model: str = DEFAULT_MODEL):
+def cmd_evaluate(model: str = DEFAULT_MODEL, judges: list[str] | None = None):
     from nous.evaluation.runner import evaluate, print_scores
-    n = evaluate(model=model)
+    n = evaluate(model=model, judge_models=judges)
     print(f"\n{n} new judge ratings stored.")
     print_scores()
+
+
+def cmd_litcheck():
+    from nous.evaluation.literature import check_literature
+    check_literature()
+
+
+def cmd_migrate_domains():
+    from nous.migrate import migrate_domains
+    migrate_domains()
 
 
 def cmd_rate(name: str):
@@ -249,8 +264,17 @@ def main():
         limit = int(args[1]) if len(args) > 1 else None
         cmd_abstract(limit)
     elif cmd == "evaluate":
+        judges = None
+        if "--judges" in args:
+            i = args.index("--judges")
+            judges = [m for m in args[i + 1].split(",") if m] if i + 1 < len(args) else None
+            args = args[:i] + args[i + 2:]
         model = args[1] if len(args) > 1 else DEFAULT_MODEL
-        cmd_evaluate(model)
+        cmd_evaluate(model, judges)
+    elif cmd == "litcheck":
+        cmd_litcheck()
+    elif cmd == "migrate-domains":
+        cmd_migrate_domains()
     elif cmd == "rate":
         if len(args) < 2:
             print("Usage: python nous.py rate <your-name>")

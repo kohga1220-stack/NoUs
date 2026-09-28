@@ -6,6 +6,7 @@ import time
 import requests
 
 from nous.config import DATA_DIR, DB_PATH, RAW_PATH
+from nous.domains import canonical_domain
 
 WIKI_API = "https://en.wikipedia.org/w/api.php"
 HEADERS = {"User-Agent": "Nous/0.1 (personal knowledge research tool; contact: nous-project)"}
@@ -174,7 +175,7 @@ def save_article(domain: str, article: dict):
         VALUES (?, ?, ?, ?, ?, ?)
     """, (
         article["title"],
-        domain,
+        canonical_domain(domain),
         article["summary"],
         article["text"],
         article["page_id"],

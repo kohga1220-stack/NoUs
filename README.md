@@ -42,8 +42,12 @@ python nous.py abstract [limit]    # 各記事を「分野語を使わない構�
 python nous.py evaluate            # 5つのScepter視点のLLM審査員がルーブリック(1-5)で採点 + 埋め込み新規性
 python nous.py rate <name>         # 人間が同じルーブリックで採点
 python nous.py scores              # 総合点ランキング
-python nous.py reliability         # 審査員間一致度 ICC(2,1)/ICC(2,k)/ICC(3,1)
+python nous.py reliability         # 一致度：LLM審査員どうし／人間 × LLM平均（r・ICC・甘さの偏り）
+python nous.py evaluate --judges gemma4:e2b,llama3.2:3b,qwen2.5:3b   # 別モデルを審査員に
+python nous.py litcheck            # OpenAlex 意味検索で最も近い既存論文を探し lit-novelty を記録
 ```
+
+LLM 応答の JSON が壊れていた場合は自動で再試行する。
 
 ルーブリック: novelty / testability / specificity / coherence / structural_depth。
 
@@ -55,6 +59,7 @@ python nous.py openalex [n]        # 各分野の被引用上位 + 直近の論�
 python nous.py voids --refresh     # 分野ペアの共起 lift → 文献に基づく Void Zone
 python nous.py fillvoids --openalex  # Void ペアを実際に架橋している希少な論文を収集
 python nous.py trends              # 各分野の年次成長率と加速度
+python nous.py migrate-domains     # 旧ドメイン名（physics 等）を OpenAlex の分野名に統一（1回）
 ```
 
 一通り実行しても API 費用は数セント程度（list/group_by は 1 回 $0.0001）。

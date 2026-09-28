@@ -50,6 +50,27 @@ DOMAIN_TO_SCEPTER.update({
 
 HYPOTHESIS_DOMAIN = "hypothesis"
 
+# Legacy Wikipedia/arXiv domains -> OpenAlex field slugs, so that one taxonomy is used
+# everywhere (same-domain penalty, void zones, colors).
+LEGACY_TO_OPENALEX: dict[str, str] = {
+    "physics":          "physics_and_astronomy",
+    "biology":          "agricultural_and_biological_sciences",
+    "economics":        "economics_econometrics_and_finance",
+    "sociology":        "social_sciences",
+    "philosophy":       "arts_and_humanities",
+    "history":          "arts_and_humanities",
+    "linguistics":      "arts_and_humanities",   # ASJC: Language and Linguistics
+    # identical in both taxonomies
+    "mathematics":      "mathematics",
+    "psychology":       "psychology",
+    "computer_science": "computer_science",
+}
+
+
+def canonical_domain(domain: str) -> str:
+    """Map a legacy domain name to its OpenAlex field slug (other names pass through)."""
+    return LEGACY_TO_OPENALEX.get(domain, domain)
+
 
 def scepter_for(domain: str) -> str | None:
     """Return the Scepter responsible for a collector domain (None if unmapped)."""

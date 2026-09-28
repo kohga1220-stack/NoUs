@@ -70,6 +70,27 @@ def rated_by(rater: str, db_path=None) -> set[str]:
     return {r[0] for r in rows}
 
 
+def clean_hypothesis_text(text: str | None) -> str | None:
+    """
+    Normalise stored hypothesis text for evaluation.
+    - '[parse error: ...]' placeholders          -> None (not a hypothesis)
+    - raw LLM JSON stored when parsing failed     -> its "hypothesis" field, if recoverable
+    """
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith("["):
+        return None
+    if t.startswith("{"):
+        from nous.llm import extract_json
+        try:
+            inner = extract_json(t).get("hypothesis")
+        except (ValueError, AttributeError):
+            return None
+        return str(inner).strip() if inner else None
+    return t
+
+
 def _table_exists(conn, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
                         (name,)).fetchone() is not None
@@ -106,5 +127,6 @@ def load_targets(db_path=None) -> list[dict]:
                             "domain": "NOUS"})
 
     conn.close()
-    # parse-error placeholders are not real hypotheses
-    return [t for t in targets if t["text"] and not t["text"].startswith("[")]
+    for t in targets:
+        t["text"] = clean_hypothesis_text(t["text"])
+    return [t for t in targets if t["text"]]

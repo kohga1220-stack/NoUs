@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 from nous.config import DB_PATH, RAW_PATH
+from nous.domains import canonical_domain
 
 ARXIV_API = "https://export.arxiv.org/api/query"
 
@@ -112,7 +113,7 @@ def save_paper(paper: dict):
         VALUES (?, ?, ?, ?, ?, ?)
     """, (
         paper["title"],
-        paper["domain"],
+        canonical_domain(paper["domain"]),
         paper["summary"],
         paper["text"],
         None,

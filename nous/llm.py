@@ -37,5 +37,15 @@ def generate(prompt: str, model: str = DEFAULT_MODEL) -> str:
     return ollama.generate(model=model, prompt=prompt)["response"]
 
 
-def generate_json(prompt: str, model: str = DEFAULT_MODEL) -> dict:
-    return extract_json(generate(prompt, model=model))
+def generate_json(prompt: str, model: str = DEFAULT_MODEL, retries: int = 2) -> dict:
+    """
+    Generate and parse a JSON object. Small models occasionally emit malformed JSON,
+    so the call is retried up to `retries` more times before the error is raised.
+    """
+    last_error: Exception | None = None
+    for _ in range(retries + 1):
+        try:
+            return extract_json(generate(prompt, model=model))
+        except ValueError as ex:        # json.JSONDecodeError is a ValueError
+            last_error = ex
+    raise last_error

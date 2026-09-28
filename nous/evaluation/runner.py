@@ -13,16 +13,26 @@ from nous.evaluation.reliability import icc, interpret
 from nous.evaluation.rubric import ITEMS, PROMPT_VERSION, RUBRIC, clamp_score, llm_judge
 
 AUTO_RATER = "auto:embedding"
+MIN_TARGETS = 10   # below this, ICC estimates are too unstable to interpret
 
 
-def _judges(model: str) -> list[tuple[str, str]]:
-    """(rater_id, persona) — one judge per Scepter lens."""
+def _judges(models: list[str]) -> list[tuple[str, str, str]]:
+    """
+    (rater_id, persona, model).
+    One model  -> five judges, one per Scepter lens (persona variation only).
+    Several    -> one neutral judge per model; different models give more
+                  independent raters and avoid a model grading only its own output.
+    """
     from nous.scepter.registry import ALL_SCEPTERS
-    return [(f"llm:{model}:{s.name}", f"{s.domain} — {s.lens}") for s in ALL_SCEPTERS]
+    if len(models) == 1:
+        m = models[0]
+        return [(f"llm:{m}:{s.name}", f"{s.domain} — {s.lens}", m) for s in ALL_SCEPTERS]
+    return [(f"llm:{m}:neutral", "", m) for m in models]
 
 
 def evaluate(refs: list[str] | None = None, model: str = DEFAULT_MODEL,
-             with_novelty: bool = True, verbose: bool = True) -> int:
+             with_novelty: bool = True, verbose: bool = True,
+             judge_models: list[str] | None = None) -> int:
     """Score every (or the given) target with all judges; skips already-rated pairs."""
     targets = store.load_targets()
     if refs:
@@ -32,13 +42,13 @@ def evaluate(refs: list[str] | None = None, model: str = DEFAULT_MODEL,
         return 0
 
     n_saved = 0
-    for rater, persona in _judges(model):
+    for rater, persona, judge_model in _judges(judge_models or [model]):
         done = store.rated_by(rater)
         for t in targets:
             if t["ref"] in done:
                 continue
             try:
-                scores, rationales = llm_judge(t["text"], t["query"], persona, model)
+                scores, rationales = llm_judge(t["text"], t["query"], persona, judge_model)
             except Exception as ex:
                 if verbose:
                     print(f"  [WARN] {rater} on {t['ref']}: {ex}")
@@ -48,7 +58,7 @@ def evaluate(refs: list[str] | None = None, model: str = DEFAULT_MODEL,
                 n_saved += 1
                 if verbose:
                     s = " ".join(f"{k[:4]}={v:g}" for k, v in scores.items())
-                    print(f"  {t['ref']:<12} {rater.split(':')[-1]:<10} {s}")
+                    print(f"  {t['ref']:<12} {rater[4:]:<28} {s}")
 
     if with_novelty:
         done = store.rated_by(AUTO_RATER)
@@ -107,20 +117,24 @@ def human_rate(rater_name: str, limit: int = 10):
 #  Aggregation (pure)                                                 #
 # ------------------------------------------------------------------ #
 
+AUTO_ITEMS = ("novelty_embedding", "novelty_literature")
+
+
 def aggregate(rows: list[dict]) -> list[dict]:
     """
     Mean score per item per target across raters (rubric items only), plus
-    `composite` = mean of the item means and the automatic novelty metric.
+    `composite` = mean of the item means, and the automatic metrics
+    (novelty_embedding, novelty_literature) kept separately.
     Sorted by composite, best first.
     """
     by_target: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
-    auto: dict[str, float] = {}
+    auto: dict[str, dict[str, float]] = defaultdict(dict)
     raters: dict[str, set] = defaultdict(set)
     for r in rows:
         if r["score"] is None:
             continue
-        if r["item"] == "novelty_embedding":
-            auto[r["target_ref"]] = r["score"]
+        if r["item"] in AUTO_ITEMS:
+            auto[r["target_ref"]][r["item"]] = r["score"]
             continue
         if r["item"] in ITEMS:
             by_target[r["target_ref"]][r["item"]].append(r["score"])
@@ -134,7 +148,8 @@ def aggregate(rows: list[dict]) -> list[dict]:
             "item_means": means,
             "composite": float(np.mean(list(means.values()))),
             "n_raters": len(raters[ref]),
-            "novelty_embedding": auto.get(ref),
+            "novelty_embedding": auto[ref].get("novelty_embedding"),
+            "novelty_literature": auto[ref].get("novelty_literature"),
         })
     out.sort(key=lambda x: x["composite"], reverse=True)
     return out
@@ -165,13 +180,46 @@ def reliability_report(rows: list[dict], rater_prefix: str | None = None) -> lis
     report = []
     for item in ITEMS:
         m, targets, raters = rating_matrix(rows, item, rater_prefix)
-        entry = {"item": item, "n_targets": len(targets), "n_raters": len(raters)}
+        entry = {"item": item, "n_targets": len(targets), "n_raters": len(raters),
+                 "small_n": len(targets) < MIN_TARGETS}
         if len(targets) >= 2 and len(raters) >= 2:
             res = icc(m)
             entry.update({k: res[k] for k in ("ICC2", "ICC2k", "ICC3")})
             entry["verdict"] = interpret(res["ICC2k"])
         report.append(entry)
     return report
+
+
+def human_vs_llm(rows: list[dict], human_prefix: str = "human:",
+                 llm_prefix: str = "llm:") -> list[dict]:
+    """
+    Does the LLM panel agree with human judgment?
+    Per item, over targets scored by at least one human and one LLM judge:
+      r     : Pearson correlation between the human mean and the LLM-panel mean
+      icc   : ICC(2,1) treating "human" and "LLM panel" as two raters (absolute agreement)
+      bias  : mean(LLM - human); positive = the LLM panel is more lenient
+    """
+    out = []
+    for item in ITEMS:
+        human: dict[str, list[float]] = defaultdict(list)
+        llm: dict[str, list[float]] = defaultdict(list)
+        for r in rows:
+            if r["item"] != item or r["score"] is None:
+                continue
+            if r["rater"].startswith(human_prefix):
+                human[r["target_ref"]].append(r["score"])
+            elif r["rater"].startswith(llm_prefix):
+                llm[r["target_ref"]].append(r["score"])
+        refs = sorted(set(human) & set(llm))
+        entry = {"item": item, "n_targets": len(refs), "small_n": len(refs) < MIN_TARGETS}
+        if len(refs) >= 3:
+            h = np.array([np.mean(human[t]) for t in refs])
+            l = np.array([np.mean(llm[t]) for t in refs])
+            entry["bias"] = float(np.mean(l - h))
+            entry["r"] = float(np.corrcoef(h, l)[0, 1]) if h.std() > 0 and l.std() > 0 else float("nan")
+            entry["icc"] = icc(np.column_stack([h, l]))["ICC2"]
+        out.append(entry)
+    return out
 
 
 # ------------------------------------------------------------------ #
@@ -183,28 +231,60 @@ def print_scores(top: int = 15):
     if not agg:
         print("No evaluations yet. Run 'nous.py evaluate' first.")
         return
+    from nous.evaluation.literature import closest_prior_work
     targets = {t["ref"]: t for t in store.load_targets()}
-    print("\n=== Hypothesis ranking (rubric composite, 1-5) ===\n")
+    print("\n=== Hypothesis ranking (rubric composite, 1-5) ===")
+    print("emb-novelty: vs. Nous knowledge base / lit-novelty: vs. OpenAlex literature (0-1)\n")
     for a in agg[:top]:
         t = targets.get(a["ref"], {})
-        nov = a["novelty_embedding"]
-        nov_s = f"  emb-novelty={nov:.2f}" if nov is not None else ""
+        nov_s = ""
+        if a["novelty_embedding"] is not None:
+            nov_s += f"  emb-novelty={a['novelty_embedding']:.2f}"
+        if a["novelty_literature"] is not None:
+            nov_s += f"  lit-novelty={a['novelty_literature']:.2f}"
         print(f"  {a['composite']:.2f}  {a['ref']:<12} (raters={a['n_raters']}){nov_s}")
         print("        " + " ".join(f"{k}={v:.1f}" for k, v in a["item_means"].items()))
         if t:
             print(f"        [{t['query']}] {t['text'][:110]}...")
+        for w in closest_prior_work(a["ref"]):
+            print(f"        closest prior work: {w['title'][:80]} ({w['year']}, sim={w['sim']:.2f})")
+
+
+def _print_icc_table(report: list[dict]):
+    for e in report:
+        if "ICC2" not in e:
+            print(f"  {e['item']:<17} insufficient data "
+                  f"(targets={e['n_targets']}, raters={e['n_raters']})")
+            continue
+        warn = "  ⚠ n<10: do not interpret" if e["small_n"] else ""
+        print(f"  {e['item']:<17} ICC2={e['ICC2']:.2f}  ICC2k={e['ICC2k']:.2f}  "
+              f"ICC3={e['ICC3']:.2f}  → {e['verdict']}  "
+              f"(targets={e['n_targets']}, raters={e['n_raters']}){warn}")
 
 
 def print_reliability(rater_prefix: str | None = None):
     rows = store.load_scores()
     print("\n=== Inter-rater reliability (ICC, Shrout & Fleiss 1979) ===")
     print("ICC2 = single judge, absolute agreement; ICC2k = mean of all judges.")
-    print("Interpretation follows Koo & Li (2016) on ICC2k.\n")
-    for e in reliability_report(rows, rater_prefix):
-        if "ICC2" not in e:
-            print(f"  {e['item']:<17} insufficient data "
-                  f"(targets={e['n_targets']}, raters={e['n_raters']})")
-            continue
-        print(f"  {e['item']:<17} ICC2={e['ICC2']:.2f}  ICC2k={e['ICC2k']:.2f}  "
-              f"ICC3={e['ICC3']:.2f}  → {e['verdict']}  "
-              f"(targets={e['n_targets']}, raters={e['n_raters']})")
+    print("Interpretation follows Koo & Li (2016) on ICC2k.")
+
+    if rater_prefix:
+        print(f"\n[raters matching '{rater_prefix}']")
+        _print_icc_table(reliability_report(rows, rater_prefix))
+        return
+
+    print("\n[LLM judges only]")
+    _print_icc_table(reliability_report(rows, "llm:"))
+
+    hv = human_vs_llm(rows)
+    if any(e["n_targets"] for e in hv):
+        print("\n[Human vs. LLM panel]  bias > 0 = LLM panel more lenient than the human")
+        for e in hv:
+            if "bias" not in e:
+                print(f"  {e['item']:<17} insufficient data (targets={e['n_targets']})")
+                continue
+            warn = "  ⚠ n<10: do not interpret" if e["small_n"] else ""
+            print(f"  {e['item']:<17} r={e['r']:.2f}  ICC2={e['icc']:.2f}  "
+                  f"bias={e['bias']:+.2f}  (targets={e['n_targets']}){warn}")
+    else:
+        print("\n[Human vs. LLM panel] no human ratings yet — run 'nous.py rate <name>'")

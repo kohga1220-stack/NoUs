@@ -117,7 +117,7 @@ def human_rate(rater_name: str, limit: int = 10):
 #  Aggregation (pure)                                                 #
 # ------------------------------------------------------------------ #
 
-AUTO_ITEMS = ("novelty_embedding", "novelty_literature")
+AUTO_ITEMS = ("novelty_embedding", "novelty_literature", "combo_novelty", "combo_checked")
 
 
 def aggregate(rows: list[dict]) -> list[dict]:
@@ -150,6 +150,7 @@ def aggregate(rows: list[dict]) -> list[dict]:
             "n_raters": len(raters[ref]),
             "novelty_embedding": auto[ref].get("novelty_embedding"),
             "novelty_literature": auto[ref].get("novelty_literature"),
+            "combo_novelty": auto[ref].get("combo_novelty"),
         })
     out.sort(key=lambda x: x["composite"], reverse=True)
     return out
@@ -231,6 +232,7 @@ def print_scores(top: int = 15):
     if not agg:
         print("No evaluations yet. Run 'nous.py evaluate' first.")
         return
+    from nous.evaluation.combination import combo_summary
     from nous.evaluation.literature import closest_prior_work, known_threshold
     cutoff = known_threshold()
     targets = {t["ref"]: t for t in store.load_targets()}
@@ -252,6 +254,14 @@ def print_scores(top: int = 15):
         print("        " + " ".join(f"{k}={v:.1f}" for k, v in a["item_means"].items()))
         if t:
             print(f"        [{t['query']}] {t['text'][:110]}...")
+        combo = combo_summary(a["ref"])
+        if combo:
+            if combo["pair"]:
+                p = combo["pair"]
+                print(f"        combination: {combo['label']} — {p['a']} × {p['b']} "
+                      f"(joint={p['joint']:,}, lift={p['lift']:.3f})")
+            else:
+                print(f"        combination: {combo['label']}")
         for w in closest_prior_work(a["ref"]):
             print(f"        closest prior work: {w['title'][:80]} ({w['year']}, sim={w['sim']:.2f})")
 

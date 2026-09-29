@@ -25,6 +25,7 @@ Usage:
     python nous.py scores              # Ranking of hypotheses
     python nous.py reliability         # Inter-rater agreement (ICC): LLM judges, and human vs. LLM
     python nous.py litcheck            # Compare each hypothesis with the closest OpenAlex papers
+    python nous.py calibrate           # Measure lit-novelty of 10 famous ideas to set a "known" cut-off
 
   OpenAlex (set OPENALEX_API_KEY; free key gives $1/day)
     python nous.py openalex [n]        # Collect n cited + n recent works from each of 26 fields
@@ -168,6 +169,11 @@ def cmd_litcheck():
     check_literature()
 
 
+def cmd_calibrate():
+    from nous.evaluation.literature import calibrate
+    calibrate()
+
+
 def cmd_migrate_domains():
     from nous.migrate import migrate_domains
     migrate_domains()
@@ -273,6 +279,8 @@ def main():
         cmd_evaluate(model, judges)
     elif cmd == "litcheck":
         cmd_litcheck()
+    elif cmd == "calibrate":
+        cmd_calibrate()
     elif cmd == "migrate-domains":
         cmd_migrate_domains()
     elif cmd == "rate":

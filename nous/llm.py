@@ -7,21 +7,46 @@ import json
 
 from nous.config import DEFAULT_MODEL
 
-_VALID_ESCAPES = set('"\\bfnrt/')
+_HEX = set("0123456789abcdefABCDEF")
+_LATEX_LEADERS = set("bfrt")     # \beta \frac \rightarrow \text ... start like JSON escapes
 
 
 def sanitize_json(s: str) -> str:
-    """Remove invalid JSON escape sequences produced by the LLM."""
-    result = []
-    i = 0
-    while i < len(s):
-        if s[i] == '\\' and i + 1 < len(s) and s[i+1] not in _VALID_ESCAPES and s[i+1] != 'u':
-            result.append(' ')
+    r"""
+    Repair backslashes in LLM output so json.loads accepts it without corrupting LaTeX.
+
+    - `\\`, `\"`, `\/`, `\uXXXX`, and `\n` stay as valid JSON escapes.
+    - `\b \f \r \t` followed by a letter are almost always LaTeX (\beta, \frac,
+      \rightarrow, \text), not control characters -> keep the backslash as a literal.
+    - any other invalid escape (\alpha, \(, \{ ...) keeps its backslash as a literal.
+    Known trade-off: \n followed by a letter is read as a newline, so \nu / \neq lose
+    their backslash.
+    """
+    out: list[str] = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c != "\\":
+            out.append(c)
             i += 1
-        else:
-            result.append(s[i])
+            continue
+        nxt = s[i + 1] if i + 1 < n else ""
+        if nxt in ('\\', '"', "/"):
+            out.append(c + nxt)
+            i += 2
+        elif nxt == "u" and n - i >= 6 and all(ch in _HEX for ch in s[i + 2:i + 6]):
+            out.append(s[i:i + 6])
+            i += 6
+        elif nxt in _LATEX_LEADERS and i + 2 < n and s[i + 2].isalpha():
+            out.append("\\\\")           # literal backslash; the letters follow normally
             i += 1
-    return ''.join(result)
+        elif nxt in ("b", "f", "n", "r", "t"):
+            out.append(c + nxt)
+            i += 2
+        else:                                # invalid escape (or trailing backslash)
+            out.append("\\\\")
+            i += 1
+    return "".join(out)
 
 
 def extract_json(raw: str) -> dict:

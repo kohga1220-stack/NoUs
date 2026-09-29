@@ -132,3 +132,165 @@ def closest_prior_work(ref: str, k: int = 1) -> list[dict]:
     """, (ref, k)).fetchall()
     conn.close()
     return [{"title": r[0], "year": r[1], "sim": r[2], "work_id": r[3]} for r in rows]
+
+
+# ------------------------------------------------------------------ #
+#  Calibration                                                        #
+# ------------------------------------------------------------------ #
+#
+# lit-novelty = 1 - max cosine is not an absolute quantity: its scale depends on the
+# embedding model and on how long the texts are. To learn what value means "this idea
+# is already in the literature", we measure the same quantity on well-known, published
+# ideas written in the same style as Nous hypotheses (positive controls).
+# The label is the classic source; the sentence is a paraphrase written for this test.
+
+KNOWN_IDEAS: list[tuple[str, str]] = [
+    ("Bak-Tang-Wiesenfeld 1987",
+     "Large systems of many interacting components can organize themselves into a critical "
+     "state without external tuning, where a small perturbation triggers avalanches of all "
+     "sizes whose distribution follows a power law."),
+    ("Watts-Strogatz 1998",
+     "Networks can combine high local clustering with short average path lengths when a few "
+     "random long-range links are added to a regular lattice, producing small-world structure."),
+    ("Barabasi-Albert 1999",
+     "Scale-free networks with power-law degree distributions emerge from growth combined "
+     "with preferential attachment, in which new nodes link preferentially to well-connected nodes."),
+    ("West-Brown-Enquist 1997",
+     "Metabolic rate scales with body mass to the three-quarter power because resources are "
+     "distributed through space-filling, fractal-like hierarchical branching networks."),
+    ("Kahneman-Tversky 1979",
+     "People evaluate outcomes as gains and losses relative to a reference point rather than "
+     "final wealth, and losses loom larger than equivalent gains, which shapes decisions under risk."),
+    ("Tononi 2004",
+     "Consciousness corresponds to integrated information: a system is conscious to the extent "
+     "that it generates information as a whole that exceeds the information of its parts."),
+    ("Friston 2010",
+     "Biological agents maintain their organization by minimizing variational free energy, "
+     "which amounts to minimizing surprise about sensory states through perception and action."),
+    ("Dunbar 1992",
+     "Primate neocortex size correlates with social group size, suggesting that the computational "
+     "demands of tracking social relationships drove the evolution of large brains."),
+    ("Williams-Bargh 2008",
+     "Physical experiences of warmth, such as holding a warm cup, prime judgments of interpersonal "
+     "warmth, linking bodily sensation to social cognition through embodied metaphor."),
+    ("Castellano-Fortunato-Loreto 2009",
+     "Collective opinion formation can be modeled with statistical physics, where agents adopt "
+     "the states of their neighbors and the population undergoes transitions from disorder to consensus."),
+]
+
+
+def quantiles(values: list[float]) -> dict[str, float]:
+    """min / q25 / median / q75 / max of a list (pure)."""
+    import numpy as np
+    a = np.asarray(values, dtype=float)
+    return {"min": float(a.min()), "q25": float(np.percentile(a, 25)),
+            "median": float(np.median(a)), "q75": float(np.percentile(a, 75)),
+            "max": float(a.max())}
+
+
+def summarize_calibration(known: list[float], hypotheses: list[float]) -> dict:
+    """
+    Suggest a 'probably already known' cut-off and apply it to the hypotheses.
+
+    threshold = 75th percentile of the known ideas' lit-novelty. About three quarters of
+    the classic ideas score at or below it, so a hypothesis at or below it looks at least
+    as 'already published' as most classics. It is a heuristic for triage, not a proof.
+    """
+    k = quantiles(known)
+    threshold = k["q75"]
+    flagged = [h for h in hypotheses if h <= threshold]
+    return {
+        "known": k,
+        "hypotheses": quantiles(hypotheses) if hypotheses else None,
+        "threshold": threshold,
+        "n_hypotheses": len(hypotheses),
+        "n_flagged": len(flagged),
+        "separated": bool(hypotheses) and quantiles(hypotheses)["median"] > k["median"],
+    }
+
+
+def _ensure_controls_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS literature_controls (
+            label      TEXT PRIMARY KEY,
+            novelty    REAL,
+            top_title  TEXT,
+            top_year   INTEGER,
+            top_sim    REAL,
+            checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+
+def calibrate(n: int = 10, verbose: bool = True) -> dict | None:
+    """
+    Measure lit-novelty for the known ideas (10 semantic searches, about $0.01), then compare
+    with the Nous hypotheses already checked by `litcheck`.
+    """
+    from nous.engine.embedder import get_model
+
+    model = get_model()
+    conn = sqlite3.connect(DB_PATH)
+    _ensure_controls_table(conn)
+
+    known: list[float] = []
+    for label, text in KNOWN_IDEAS:
+        try:
+            works = search_prior_work(text, n=n)
+        except Exception as ex:
+            if verbose:
+                print(f"  [WARN] {label}: {ex}")
+            continue
+        time.sleep(1.1)
+        if not works:
+            continue
+        hyp_emb = model.encode(text).tolist()
+        ranked = rank_prior_work(hyp_emb, works, model.encode([w["text"] for w in works]).tolist())
+        top = ranked[0]
+        novelty = round(1.0 - top["sim"], 4)
+        known.append(novelty)
+        conn.execute("INSERT OR REPLACE INTO literature_controls "
+                     "(label, novelty, top_title, top_year, top_sim) VALUES (?,?,?,?,?)",
+                     (label, novelty, top["title"], top["year"], top["sim"]))
+        conn.commit()
+        if verbose:
+            print(f"  {label:<34} lit-novelty={novelty:.2f}  closest: "
+                  f"{top['title'][:55]} ({top['year']}, sim={top['sim']:.2f})")
+    conn.close()
+
+    if len(known) < 3:
+        print("Too few control results to calibrate.")
+        return None
+
+    hyp = [r["score"] for r in store.load_scores(ITEM) if r["rater"] == RATER
+           and r["target_ref"].split(":")[0] in ("hyp", "scepter", "verdict")]
+    result = summarize_calibration(known, hyp)
+
+    if verbose:
+        k, h = result["known"], result["hypotheses"]
+        print("\n=== lit-novelty calibration ===")
+        print(f"  known ideas   (n={len(known)}):  min {k['min']:.2f}  q25 {k['q25']:.2f}  "
+              f"median {k['median']:.2f}  q75 {k['q75']:.2f}  max {k['max']:.2f}")
+        if h:
+            print(f"  Nous hypotheses (n={len(hyp)}): min {h['min']:.2f}  q25 {h['q25']:.2f}  "
+                  f"median {h['median']:.2f}  q75 {h['q75']:.2f}  max {h['max']:.2f}")
+        print(f"\n  suggested 'probably already known' cut-off: lit-novelty <= {result['threshold']:.2f}")
+        if hyp:
+            print(f"  hypotheses at or below it: {result['n_flagged']} / {result['n_hypotheses']}")
+            print("  Nous hypotheses are more novel than the classics (median)."
+                  if result["separated"] else
+                  "  Nous hypotheses are NOT more novel than well-known classics (median).")
+        print("  Note: 10 controls only; the cut-off is a triage heuristic, not proof of prior work.")
+    return result
+
+
+def known_threshold() -> float | None:
+    """Cut-off saved by `calibrate` (75th percentile of the known ideas' lit-novelty), if any."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        _ensure_controls_table(conn)
+        vals = [r[0] for r in conn.execute("SELECT novelty FROM literature_controls")]
+    finally:
+        conn.close()
+    return quantiles(vals)["q75"] if len(vals) >= 3 else None

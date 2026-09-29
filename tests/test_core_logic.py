@@ -1,6 +1,7 @@
 """
 Unit tests for the pure (no LLM / no ChromaDB) parts of Nous.
 """
+import json
 import sqlite3
 
 import networkx as nx
@@ -103,7 +104,7 @@ def test_every_collector_domain_maps_to_a_real_scepter():
 
 def test_sanitize_and_extract_json():
     raw = 'Sure! {"hypothesis": "a \\x b", "confidence": 0.7} done'
-    assert "\\x" not in sanitize_json('"\\x"')
+    assert json.loads(sanitize_json('"\\x"')) == "\\x"      # kept as a literal backslash
     out = extract_json(raw)
     assert out["confidence"] == 0.7
 

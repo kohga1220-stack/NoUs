@@ -26,6 +26,7 @@ Usage:
     python nous.py reliability         # Inter-rater agreement (ICC): LLM judges, and human vs. LLM
     python nous.py litcheck            # Compare each hypothesis with the closest OpenAlex papers
     python nous.py calibrate           # Measure lit-novelty of 10 famous ideas to set a "known" cut-off
+    python nous.py combocheck          # Split each hypothesis into concepts; is the PAIRING rare in OpenAlex?
 
   OpenAlex (set OPENALEX_API_KEY; free key gives $1/day)
     python nous.py openalex [n]        # Collect n cited + n recent works from each of 26 fields
@@ -169,6 +170,11 @@ def cmd_litcheck():
     check_literature()
 
 
+def cmd_combocheck(model: str = DEFAULT_MODEL):
+    from nous.evaluation.combination import check_combinations
+    check_combinations(model=model)
+
+
 def cmd_calibrate():
     from nous.evaluation.literature import calibrate
     calibrate()
@@ -281,6 +287,8 @@ def main():
         cmd_litcheck()
     elif cmd == "calibrate":
         cmd_calibrate()
+    elif cmd == "combocheck":
+        cmd_combocheck(args[1] if len(args) > 1 else DEFAULT_MODEL)
     elif cmd == "migrate-domains":
         cmd_migrate_domains()
     elif cmd == "rate":

@@ -231,10 +231,14 @@ def print_scores(top: int = 15):
     if not agg:
         print("No evaluations yet. Run 'nous.py evaluate' first.")
         return
-    from nous.evaluation.literature import closest_prior_work
+    from nous.evaluation.literature import closest_prior_work, known_threshold
+    cutoff = known_threshold()
     targets = {t["ref"]: t for t in store.load_targets()}
     print("\n=== Hypothesis ranking (rubric composite, 1-5) ===")
-    print("emb-novelty: vs. Nous knowledge base / lit-novelty: vs. OpenAlex literature (0-1)\n")
+    print("emb-novelty: vs. Nous knowledge base / lit-novelty: vs. OpenAlex literature (0-1)")
+    if cutoff is not None:
+        print(f"⚑ = lit-novelty <= {cutoff:.2f} (calibrated on famous ideas; see 'nous.py calibrate')")
+    print()
     for a in agg[:top]:
         t = targets.get(a["ref"], {})
         nov_s = ""
@@ -242,6 +246,8 @@ def print_scores(top: int = 15):
             nov_s += f"  emb-novelty={a['novelty_embedding']:.2f}"
         if a["novelty_literature"] is not None:
             nov_s += f"  lit-novelty={a['novelty_literature']:.2f}"
+            if cutoff is not None and a["novelty_literature"] <= cutoff:
+                nov_s += "  ⚑ likely already known"
         print(f"  {a['composite']:.2f}  {a['ref']:<12} (raters={a['n_raters']}){nov_s}")
         print("        " + " ".join(f"{k}={v:.1f}" for k, v in a["item_means"].items()))
         if t:

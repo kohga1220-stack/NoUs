@@ -70,6 +70,27 @@ def rated_by(rater: str, db_path=None) -> set[str]:
     return {r[0] for r in rows}
 
 
+_CONTROL_TO_LATEX = {"\r": "\\r", "\x08": "\\b", "\x0c": "\\f"}
+
+
+def repair_latex_controls(text: str) -> str:
+    r"""
+    Undo an old parsing bug: LaTeX like \rightarrow / \beta / \frac / \text stored as
+    CR / backspace / form feed / tab + letters. A control character directly followed
+    by a letter is turned back into backslash + letter.
+    """
+    out = []
+    for i, ch in enumerate(text):
+        nxt = text[i + 1] if i + 1 < len(text) else ""
+        if ch in _CONTROL_TO_LATEX and nxt.isalpha():
+            out.append(_CONTROL_TO_LATEX[ch])
+        elif ch == "\t" and nxt.isalpha():
+            out.append("\\t")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def clean_hypothesis_text(text: str | None) -> str | None:
     """
     Normalise stored hypothesis text for evaluation.
@@ -78,7 +99,7 @@ def clean_hypothesis_text(text: str | None) -> str | None:
     """
     if not text:
         return None
-    t = text.strip()
+    t = repair_latex_controls(text).strip()
     if t.startswith("["):
         return None
     if t.startswith("{"):

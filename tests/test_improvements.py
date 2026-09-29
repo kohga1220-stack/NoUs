@@ -124,3 +124,53 @@ def test_migrate_collection_updates_only_legacy():
     c = Col()
     assert migrate_collection(c) == 1
     assert c.updated == [("1", {"title": "A", "domain": "physics_and_astronomy"})]
+
+
+# LaTeX-safe JSON parsing
+def test_sanitize_json_keeps_latex_backslashes():
+    import json
+    from nous.llm import sanitize_json
+    cases = {
+        r'{"h": "\rightarrow x"}': "\\rightarrow x",
+        r'{"h": "\frac{a}{b} and \beta"}': "\\frac{a}{b} and \\beta",
+        r'{"h": "\text{c} \times \theta"}': "\\text{c} \\times \\theta",
+        r'{"h": "\\alpha already escaped"}': "\\alpha already escaped",
+        r'{"h": "\alpha and \(x\)"}': "\\alpha and \\(x\\)",
+        r'{"h": "line1\nLine2"}': "line1\nLine2",
+        r'{"h": "quote \" ok é"}': 'quote " ok é',
+        r'{"h": "end\\"}': "end\\",
+    }
+    for raw, want in cases.items():
+        assert json.loads(sanitize_json(raw))["h"] == want, raw
+
+
+def test_repair_latex_controls_in_stored_text():
+    from nous.evaluation.store import repair_latex_controls
+    fixed = repair_latex_controls("a \rightarrow b \x08eta \x0crac \text{x} ok\r\n")
+    assert fixed == "a \\rightarrow b \\beta \\frac \\text{x} ok\r\n"
+
+
+# lit-novelty calibration
+def test_summarize_calibration_threshold_and_flags():
+    from nous.evaluation.literature import quantiles, summarize_calibration
+    known = [0.10, 0.15, 0.20, 0.25, 0.30]
+    hyps = [0.12, 0.28, 0.35, 0.40, 0.45]
+    r = summarize_calibration(known, hyps)
+    assert r["threshold"] == pytest.approx(quantiles(known)["q75"]) == pytest.approx(0.25)
+    assert r["n_flagged"] == 1 and r["n_hypotheses"] == 5
+    assert r["separated"] is True
+    assert summarize_calibration(known, [0.05, 0.1])["separated"] is False
+    assert summarize_calibration(known, [])["hypotheses"] is None
+
+
+def test_known_threshold_from_controls_table(tmp_path, monkeypatch):
+    from nous.evaluation import literature
+    db = tmp_path / "n.db"
+    monkeypatch.setattr(literature, "DB_PATH", db)
+    assert literature.known_threshold() is None
+    con = sqlite3.connect(db)
+    literature._ensure_controls_table(con)
+    con.executemany("INSERT INTO literature_controls (label, novelty) VALUES (?, ?)",
+                    [("a", 0.1), ("b", 0.2), ("c", 0.3), ("d", 0.4)])
+    con.commit(); con.close()
+    assert literature.known_threshold() == pytest.approx(0.325)

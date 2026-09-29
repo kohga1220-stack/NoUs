@@ -46,7 +46,8 @@ python nous.py reliability         # 一致度：LLM審査員どうし／人間 
 python nous.py evaluate --judges gemma4:e2b,llama3.2:3b,qwen2.5:3b   # 別モデルを審査員に
 python nous.py litcheck            # OpenAlex 意味検索で最も近い既存論文を探し lit-novelty を記録
 python nous.py calibrate           # 有名な理論10個の lit-novelty を測り「既出」の目安を作る（scores に ⚑）
-python nous.py combocheck          # 仮説を2〜4概念に分解し、その「組み合わせ」が文献で稀かを件数（lift）で判定
+python nous.py combocheck          # 仮説を2〜4概念に分解し、概念ペアの共起論文数と隣接性で「未踏の組み合わせ」を探す（★=橋渡し候補）
+python nous.py combocheck --report # 保存済みの判定を一覧（API 呼び出しなし）
 ```
 
 LLM 応答の JSON が壊れていた場合は自動で再試行する。

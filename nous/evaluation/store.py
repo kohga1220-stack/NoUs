@@ -48,6 +48,17 @@ def save_scores(target_ref: str, rater: str, scores: dict[str, float],
     conn.close()
 
 
+def delete_scores(target_ref: str, rater: str, db_path=None) -> int:
+    """Remove every score a rater gave a target (used when an automatic metric is recomputed)."""
+    ensure_tables(db_path)
+    conn = sqlite3.connect(db_path or DB_PATH)
+    n = conn.execute("DELETE FROM evaluations WHERE target_ref = ? AND rater = ?",
+                     (target_ref, rater)).rowcount
+    conn.commit()
+    conn.close()
+    return n
+
+
 def load_scores(item: str | None = None, db_path=None) -> list[dict]:
     ensure_tables(db_path)
     conn = sqlite3.connect(db_path or DB_PATH)

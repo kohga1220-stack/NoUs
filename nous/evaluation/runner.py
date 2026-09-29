@@ -256,10 +256,12 @@ def print_scores(top: int = 15):
             print(f"        [{t['query']}] {t['text'][:110]}...")
         combo = combo_summary(a["ref"])
         if combo:
+            star = " ★ bridge candidate" if combo["bridge_candidate"] else ""
             if combo["pair"]:
                 p = combo["pair"]
-                print(f"        combination: {combo['label']} — {p['a']} × {p['b']} "
-                      f"(joint={p['joint']:,}, lift={p['lift']:.3f})")
+                adj = f", adjacency={p['adjacency']:.2f}" if p.get("adjacency") is not None else ""
+                print(f"        combination: {combo['label']}{star} — {p['a']} × {p['b']} "
+                      f"(joint={p['joint']:,}{adj})")
             else:
                 print(f"        combination: {combo['label']}")
         for w in closest_prior_work(a["ref"]):

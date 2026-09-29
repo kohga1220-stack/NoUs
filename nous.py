@@ -27,6 +27,7 @@ Usage:
     python nous.py litcheck            # Compare each hypothesis with the closest OpenAlex papers
     python nous.py calibrate           # Measure lit-novelty of 10 famous ideas to set a "known" cut-off
     python nous.py combocheck          # Split each hypothesis into concepts; is the PAIRING rare in OpenAlex?
+    python nous.py combocheck --report # Show all stored combination verdicts (no API calls)
 
   OpenAlex (set OPENALEX_API_KEY; free key gives $1/day)
     python nous.py openalex [n]        # Collect n cited + n recent works from each of 26 fields
@@ -170,9 +171,12 @@ def cmd_litcheck():
     check_literature()
 
 
-def cmd_combocheck(model: str = DEFAULT_MODEL):
-    from nous.evaluation.combination import check_combinations
-    check_combinations(model=model)
+def cmd_combocheck(model: str = DEFAULT_MODEL, report_only: bool = False):
+    from nous.evaluation.combination import check_combinations, print_report
+    if report_only:
+        print_report()
+    else:
+        check_combinations(model=model)
 
 
 def cmd_calibrate():
@@ -288,7 +292,8 @@ def main():
     elif cmd == "calibrate":
         cmd_calibrate()
     elif cmd == "combocheck":
-        cmd_combocheck(args[1] if len(args) > 1 else DEFAULT_MODEL)
+        rest = [a for a in args[1:] if not a.startswith("--")]
+        cmd_combocheck(rest[0] if rest else DEFAULT_MODEL, report_only="--report" in args)
     elif cmd == "migrate-domains":
         cmd_migrate_domains()
     elif cmd == "rate":

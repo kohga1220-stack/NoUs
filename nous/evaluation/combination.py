@@ -22,6 +22,13 @@ A Nous hypothesis combines established ideas from different fields. It is decomp
    just an unrelated pair (nobody writes about it because there is no reason to).
    The cut-off between the two is read off the reference pairs of the same run.
 
+3. IS THE GAP ROBUST?   (loose count)
+   Exact-phrase counts miss papers that word the idea differently. For every pair with fewer
+   than STUDIED_MIN joint works, the words of both concepts are also counted *anywhere* in the
+   title/abstract (stemmed, any order). If that loose count is still < STUDIED_MIN the gap
+   survives rewording (`robust`); otherwise the phrase count was just too narrow. For pairs
+   with 1-9 joint works the most-cited titles are stored so a human can read who combined them.
+
 Reference pairs (famous combinations and deliberately unrelated ones) are measured every
 time so the numbers can be read against a scale.
 Cost: about 10 count queries + 1 group_by per concept per hypothesis at $0.0001 each.
@@ -78,6 +85,19 @@ def build_query(phrases: list[str]) -> str:
     return " AND ".join(f'"{sanitize_phrase(p)}"' for p in phrases)
 
 
+_STOP = {"of", "the", "and", "in", "for", "on", "to", "a", "an", "with", "by", "as", "at"}
+
+
+def build_loose_query(phrases: list[str]) -> str:
+    """'(phase AND transition) AND (opinion AND dynamics)': words anywhere, any order, stemmed."""
+    groups = []
+    for p in phrases:
+        words = [w for w in sanitize_phrase(p).split() if w.lower() not in _STOP]
+        if words:
+            groups.append("(" + " AND ".join(words) + ")")
+    return " AND ".join(groups)
+
+
 def pair_stats(n_a: int, n_b: int, joint: int, total: int) -> dict:
     """Independence expectation and lift (informational only)."""
     expected = n_a * n_b / total if total else 0.0
@@ -132,14 +152,15 @@ def summarize(concept_counts: dict[str, int], pairs: list[dict],
     combo_novelty: 1.0 unexplored, 1 - joint/10 for few_papers, 0.0 studied, None otherwise.
     bridge_candidate: unexplored / few_papers AND the pair's literatures are neighbours
     (adjacency >= adj_threshold).
+    robust: the gap also survives the loose (reworded) count, i.e. loose < STUDIED_MIN.
     """
     if not pairs or any(n < MIN_KNOWN for n in concept_counts.values()):
         return {"label": "unrecognized_terms", "combo_novelty": None, "pair": None,
-                "bridge_candidate": False}
+                "bridge_candidate": False, "robust": False}
     informative = [p for p in pairs if is_informative(p)]
     if not informative:
         return {"label": "inconclusive", "combo_novelty": None, "pair": None,
-                "bridge_candidate": False}
+                "bridge_candidate": False, "robust": False}
     best = min(informative, key=lambda p: (p["joint"], -(p.get("adjacency") or 0.0)))
     status = pair_status(best)
     label = {"none": "unexplored", "few_papers": "few_papers", "studied": "studied"}[status]
@@ -148,7 +169,10 @@ def summarize(concept_counts: dict[str, int], pairs: list[dict],
     adj = best.get("adjacency")
     bridge = (label in ("unexplored", "few_papers") and adj is not None
               and adj_threshold is not None and adj >= adj_threshold)
-    return {"label": label, "combo_novelty": novelty, "pair": best, "bridge_candidate": bridge}
+    loose = best.get("loose")
+    robust = label != "studied" and loose is not None and loose < STUDIED_MIN
+    return {"label": label, "combo_novelty": novelty, "pair": best, "bridge_candidate": bridge,
+            "robust": robust}
 
 
 def parse_concepts(data) -> list[str]:
@@ -209,6 +233,32 @@ class Counter:
         self.cache[query] = n
         return n
 
+    def try_count(self, query: str) -> int | None:
+        """Like count() but returns None when OpenAlex rejects the query (never changes mode)."""
+        from nous.collector.openalex import get
+        if query in self.cache:
+            return self.cache[query]
+        try:
+            data = get("works", {**self._text_params(query), "per_page": 1, "select": "id"})
+        except requests.HTTPError as ex:
+            if self._is_400(ex):
+                return None
+            raise
+        n = int(data.get("meta", {}).get("count", 0))
+        time.sleep(0.15)
+        self.cache[query] = n
+        return n
+
+    def titles(self, query: str, n: int = 5) -> list[dict]:
+        """Most-cited works matching `query` as {title, year, work_id}."""
+        from nous.collector.openalex import get, short_id
+        data = get("works", {**self._text_params(query), "per_page": n,
+                             "sort": "cited_by_count:desc",
+                             "select": "id,display_name,publication_year"})
+        time.sleep(0.15)
+        return [{"title": w.get("display_name") or "", "year": w.get("publication_year"),
+                 "work_id": short_id(w["id"])} for w in data.get("results", [])]
+
     def distribution(self, query: str) -> dict[str, int]:
         """Works matching `query`, counted per OpenAlex subfield (falls back to coarser groupings)."""
         from nous.collector.openalex import get, short_id
@@ -258,8 +308,12 @@ def measure(concepts: list[str], counter: Counter,
         if with_adjacency:
             adj = bhattacharyya(counter.distribution(build_query([a])),
                                 counter.distribution(build_query([b])))
+        loose = None
+        if joint < STUDIED_MIN:
+            loose = counter.try_count(build_loose_query([a, b]))
         pairs.append({"a": a, "b": b, "n_a": counts[a], "n_b": counts[b], "joint": joint,
-                      "expected": st["expected"], "lift": st["lift"], "adjacency": adj})
+                      "expected": st["expected"], "lift": st["lift"], "adjacency": adj,
+                      "loose": loose})
     return counts, pairs
 
 
@@ -299,10 +353,16 @@ def _ensure_table(conn):
             PRIMARY KEY (target_ref, concept_a, concept_b)
         );
         CREATE TABLE IF NOT EXISTS combo_meta (key TEXT PRIMARY KEY, value REAL);
+        CREATE TABLE IF NOT EXISTS combo_titles (
+            concept_a TEXT, concept_b TEXT, title TEXT, year INTEGER, work_id TEXT,
+            PRIMARY KEY (concept_a, concept_b, work_id)
+        );
     """)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(combo_checks)").fetchall()]
     if "adjacency" not in cols:
         conn.execute("ALTER TABLE combo_checks ADD COLUMN adjacency REAL")
+    if "loose" not in cols:
+        conn.execute("ALTER TABLE combo_checks ADD COLUMN loose INTEGER")
     conn.commit()
 
 
@@ -310,17 +370,17 @@ def _save_pairs(conn, ref: str, pairs: list[dict], method: str):
     conn.execute("DELETE FROM combo_checks WHERE target_ref = ?", (ref,))
     conn.executemany("""
         INSERT INTO combo_checks
-        (target_ref, concept_a, concept_b, n_a, n_b, joint, expected, lift, adjacency, method)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (target_ref, concept_a, concept_b, n_a, n_b, joint, expected, lift, adjacency, loose, method)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, [(ref, p["a"], p["b"], p["n_a"], p["n_b"], p["joint"], p["expected"], p["lift"],
-           p.get("adjacency"), method) for p in pairs])
+           p.get("adjacency"), p.get("loose"), method) for p in pairs])
     conn.commit()
 
 
 def _load_pairs(conn, ref: str) -> list[dict]:
-    rows = conn.execute("SELECT concept_a, concept_b, n_a, n_b, joint, expected, lift, adjacency "
+    rows = conn.execute("SELECT concept_a, concept_b, n_a, n_b, joint, expected, lift, adjacency, loose "
                         "FROM combo_checks WHERE target_ref = ?", (ref,)).fetchall()
-    return [dict(zip(("a", "b", "n_a", "n_b", "joint", "expected", "lift", "adjacency"), r))
+    return [dict(zip(("a", "b", "n_a", "n_b", "joint", "expected", "lift", "adjacency", "loose"), r))
             for r in rows]
 
 
@@ -383,8 +443,10 @@ def label_counts() -> dict[str, int]:
 def _fmt_pair(p: dict) -> str:
     adj = p.get("adjacency")
     adj_s = f", adjacency={adj:.2f}" if adj is not None else ""
+    loose = p.get("loose")
+    loose_s = f", loose={loose:,}" if loose is not None else ""
     return (f"{p['a']} × {p['b']}: n_A={p['n_a']:,}, n_B={p['n_b']:,}, "
-            f"joint={p['joint']:,}{adj_s}")
+            f"joint={p['joint']:,}{loose_s}{adj_s}")
 
 
 def measure_references(counter: Counter, verbose: bool = True) -> dict:
@@ -439,6 +501,68 @@ def fill_adjacency(counter: Counter, verbose: bool = True) -> int:
     return n
 
 
+def fill_loose(counter: Counter, verbose: bool = True) -> int:
+    """Loose (reworded) count for every stored pair with < STUDIED_MIN joint works."""
+    conn = sqlite3.connect(DB_PATH)
+    _ensure_table(conn)
+    rows = conn.execute("SELECT DISTINCT concept_a, concept_b FROM combo_checks "
+                        "WHERE loose IS NULL AND joint < ?", (STUDIED_MIN,)).fetchall()
+    n = 0
+    for a, b in rows:
+        loose = counter.try_count(build_loose_query([a, b]))
+        if loose is None:
+            continue
+        conn.execute("UPDATE combo_checks SET loose = ? WHERE concept_a = ? AND concept_b = ?",
+                     (loose, a, b))
+        n += 1
+    conn.commit()
+    conn.close()
+    if verbose and rows:
+        print(f"  loose count added for {n} stored concept pairs")
+    return n
+
+
+def fill_titles(counter: Counter, verbose: bool = True) -> int:
+    """Store the most-cited titles of every pair with 1..STUDIED_MIN-1 joint works."""
+    conn = sqlite3.connect(DB_PATH)
+    _ensure_table(conn)
+    rows = conn.execute("""
+        SELECT DISTINCT concept_a, concept_b FROM combo_checks
+        WHERE joint >= 1 AND joint < ?
+          AND NOT EXISTS (SELECT 1 FROM combo_titles t
+                          WHERE t.concept_a = combo_checks.concept_a
+                            AND t.concept_b = combo_checks.concept_b)
+    """, (STUDIED_MIN,)).fetchall()
+    n = 0
+    for a, b in rows:
+        for w in counter.titles(build_query([a, b])):
+            conn.execute("INSERT OR IGNORE INTO combo_titles VALUES (?, ?, ?, ?, ?)",
+                         (a, b, w["title"], w["year"], w["work_id"]))
+        n += 1
+    conn.commit()
+    conn.close()
+    if verbose and rows:
+        print(f"  titles stored for {n} pairs with a few joint papers")
+    return n
+
+
+def load_titles(a: str, b: str) -> list[dict]:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        _ensure_table(conn)
+        rows = conn.execute("SELECT title, year, work_id FROM combo_titles "
+                            "WHERE concept_a = ? AND concept_b = ?", (a, b)).fetchall()
+    finally:
+        conn.close()
+    return [{"title": r[0], "year": r[1], "work_id": r[2]} for r in rows]
+
+
+def rank_candidates(items: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
+    """Bridge candidates ordered: robust gaps first, then by adjacency (descending)."""
+    return sorted((x for x in items if x[1]["bridge_candidate"]),
+                  key=lambda x: (not x[1]["robust"], -(x[1]["pair"].get("adjacency") or 0.0)))
+
+
 def rescore_all() -> int:
     """Rewrite each stored target's score from its stored pairs (verdict rules may have changed)."""
     n = 0
@@ -481,16 +605,31 @@ def print_report():
                 print(f"  {ref:<11}{star} {_fmt_pair(s['pair'])}")
             else:
                 print(f"  {ref:<11}")
-    stars = [(ref, s) for lbl in groups for ref, s in groups[lbl] if s["bridge_candidate"]]
-    print(f"\nBridge candidates: {len(stars)}")
-    for ref, s in sorted(stars, key=lambda x: -(x[1]["pair"].get("adjacency") or 0)):
-        print(f"  {ref:<11} {s['label']:<10} {_fmt_pair(s['pair'])}")
+    stars = rank_candidates([(ref, s) for lbl in groups for ref, s in groups[lbl]])
+    lit = {r["target_ref"]: r["score"] for r in store.load_scores("novelty_literature")
+           if r["rater"] == "auto:openalex"}
+    from nous.evaluation.literature import known_threshold
+    cutoff = known_threshold()
+    robust_n = sum(1 for _, s in stars if s["robust"])
+    print(f"\nBridge candidates: {len(stars)} (robust to rewording: {robust_n})")
+    print("  ranked: robust gaps first, then by adjacency; lit = lit-novelty from 'litcheck' "
+          "(⚑ = likely already known)")
+    for ref, s in stars:
+        p = s["pair"]
+        mark = "robust " if s["robust"] else "phrase-only"
+        ln = lit.get(ref)
+        lit_s = ""
+        if ln is not None:
+            lit_s = f"  lit={ln:.2f}" + (" ⚑" if cutoff is not None and ln <= cutoff else "")
+        print(f"  {ref:<11} {s['label']:<10} {mark:<11} {_fmt_pair(p)}{lit_s}")
+        for w in load_titles(p["a"], p["b"]):
+            print(f"        - {w['title'][:90]} ({w['year']})")
 
 
 def check_combinations(refs: list[str] | None = None, model: str = DEFAULT_MODEL,
                        verbose: bool = True) -> int:
     """
-    1. reference pairs  2. decompose + count new hypotheses  3. adjacency for stored pairs
+    1. reference pairs  2. decompose + count new hypotheses  3. adjacency / loose counts / titles for stored pairs
     4. re-score every stored hypothesis  5. print the report.
     """
     counter = Counter()
@@ -531,6 +670,10 @@ def check_combinations(refs: list[str] | None = None, model: str = DEFAULT_MODEL
     if verbose:
         print("\nAdjacency for previously stored pairs ...")
     fill_adjacency(counter, verbose)
+    if verbose:
+        print("Loose (reworded) counts and titles ...")
+    fill_loose(counter, verbose)
+    fill_titles(counter, verbose)
     rescore_all()
     if verbose:
         print_report()

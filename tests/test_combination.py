@@ -153,6 +153,7 @@ class _FakeCounter:
     dists = {'"A"': {"1": 5, "2": 5}, '"B"': {"1": 4, "2": 6}, '"C"': {"9": 3}}
 
     def count(self, q): return self.table[q]
+    def try_count(self, q): return self.table.get(q, 2)
     def distribution(self, q): return self.dists[q]
 
 
@@ -226,8 +227,11 @@ def test_runner_aggregate_carries_combo_novelty():
 
 
 def test_print_report_groups_by_label_and_marks_bridge_candidates(tmp_path, monkeypatch, capsys):
+    from nous.evaluation import store, literature
     db = tmp_path / "n.db"
     monkeypatch.setattr(cb, "DB_PATH", db)
+    monkeypatch.setattr(store, "DB_PATH", db)
+    monkeypatch.setattr(literature, "DB_PATH", db)
     con = sqlite3.connect(db)
     cb._ensure_table(con)
     cb._save_pairs(con, "hyp:1", [P("A", "B", joint=0, adjacency=0.8)], "filter")
@@ -240,3 +244,61 @@ def test_print_report_groups_by_label_and_marks_bridge_candidates(tmp_path, monk
     assert "unexplored: 2" in out and "studied: 1" in out
     assert "hyp:1       ★" in out and "hyp:2       ★" not in out
     assert "Bridge candidates: 1" in out
+
+
+def test_loose_query_drops_stopwords_and_groups_words():
+    assert cb.build_loose_query(["phase transition", "theory of mind"]) == \
+        "(phase AND transition) AND (theory AND mind)"
+
+
+def test_robust_means_gap_survives_rewording():
+    counts = {"A": 1000, "B": 1000}
+    r = cb.summarize(counts, [P(joint=0, adjacency=0.8) | {"loose": 3}], adj_threshold=0.5)
+    assert r["robust"] and r["bridge_candidate"]
+    r = cb.summarize(counts, [P(joint=0, adjacency=0.8) | {"loose": 400}], adj_threshold=0.5)
+    assert not r["robust"] and r["bridge_candidate"]          # phrase-only gap
+    assert not cb.summarize(counts, [P(joint=0)], None)["robust"]          # loose not measured
+    assert not cb.summarize(counts, [P(joint=50) | {"loose": None}], None)["robust"]
+
+
+def test_rank_candidates_robust_first_then_adjacency():
+    def item(ref, adj, robust):
+        return ref, {"bridge_candidate": True, "robust": robust, "pair": {"adjacency": adj}}
+    ranked = cb.rank_candidates([item("a", 0.9, False), item("b", 0.5, True), item("c", 0.7, True),
+                                 ("d", {"bridge_candidate": False, "robust": True,
+                                        "pair": {"adjacency": 1.0}})])
+    assert [r for r, _ in ranked] == ["c", "b", "a"]
+
+
+def test_counter_titles_and_try_count(monkeypatch):
+    def fake_get(path, params=None):
+        if params.get("per_page") == 1:
+            if "(" in params["filter"]:
+                raise requests.HTTPError(response=_Resp(400))
+            return {"meta": {"count": 7}}
+        return {"results": [{"id": "https://openalex.org/W1", "display_name": "T", "publication_year": 2001}]}
+    monkeypatch.setattr(openalex, "get", fake_get)
+    monkeypatch.setattr(cb.time, "sleep", lambda s: None)
+    c = cb.Counter()
+    assert c.try_count('"x"') == 7
+    assert c.try_count("(a AND b)") is None and c.mode == "filter"      # no fallback triggered
+    assert c.titles('"x"') == [{"title": "T", "year": 2001, "work_id": "W1"}]
+
+
+def test_fill_loose_and_titles_for_stored_pairs(tmp_path, monkeypatch):
+    db = tmp_path / "n.db"
+    monkeypatch.setattr(cb, "DB_PATH", db)
+    con = sqlite3.connect(db)
+    cb._ensure_table(con)
+    cb._save_pairs(con, "hyp:1", [P("A", "B", joint=3), P("A", "C", joint=0), P("B", "C", joint=40)],
+                   "filter")
+    con.close()
+
+    class C(_FakeCounter):
+        def try_count(self, q): return 5
+        def titles(self, q, n=5): return [{"title": "Paper", "year": 2010, "work_id": "W9"}]
+
+    assert cb.fill_loose(C(), verbose=False) == 2            # only the pairs with joint < 10
+    assert cb.fill_titles(C(), verbose=False) == 1           # only 1 <= joint < 10
+    assert cb.load_titles("A", "B")[0]["title"] == "Paper" and cb.load_titles("A", "C") == []
+    assert cb.combo_summary("hyp:1")["pair"]["loose"] == 5

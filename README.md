@@ -47,7 +47,7 @@ python nous.py evaluate --judges gemma4:e2b,llama3.2:3b,qwen2.5:3b   # 別モデ
 python nous.py litcheck            # OpenAlex 意味検索で最も近い既存論文を探し lit-novelty を記録
 python nous.py calibrate           # 有名な理論10個の lit-novelty を測り「既出」の目安を作る（scores に ⚑）
 python nous.py combocheck          # 仮説を2〜4概念に分解し、概念ペアの共起論文数と隣接性で「未踏の組み合わせ」を探す（★=橋渡し候補）
-python nous.py combocheck --report # 保存済みの判定を一覧（API 呼び出しなし）
+python nous.py combocheck --report # 保存済みの判定を一覧（API 呼び出しなし）。★は隣接性順に並べ、言い換えに強い穴・litcheck との照合・共起論文の題名を表示
 ```
 
 LLM 応答の JSON が壊れていた場合は自動で再試行する。

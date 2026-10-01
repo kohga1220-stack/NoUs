@@ -257,6 +257,8 @@ def print_scores(top: int = 15):
         combo = combo_summary(a["ref"])
         if combo:
             star = " ★ bridge candidate" if combo["bridge_candidate"] else ""
+            if combo["robust"]:
+                star += " (robust to rewording)"
             if combo["pair"]:
                 p = combo["pair"]
                 adj = f", adjacency={p['adjacency']:.2f}" if p.get("adjacency") is not None else ""

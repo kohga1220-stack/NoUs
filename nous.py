@@ -12,7 +12,7 @@ Usage:
     python nous.py link                # Auto-analyze & store links between all hypotheses
     python nous.py network             # Show the hypothesis relationship network
     python nous.py sync                # Sync hypotheses back into knowledge base
-    python nous.py debate "concept"    # Run full 5-Scepter debate + NOUS synthesis
+    python nous.py debate "concept"    # Run full 5-Scepter debate + NOUS synthesis (refuses an identical repeated question; --force)
     python nous.py debates             # Show recent debate sessions
 
   Structure (domain-free abstractions; requires Ollama)
@@ -37,7 +37,7 @@ Usage:
 
   Autonomous loop (needs OPENALEX_API_KEY and Ollama)
     python nous.py autoloop [cycles] [--per-pair N] [--abstract]   # void pair -> hypothesis -> checks -> accept/reject
-    python nous.py autoloop --plan     # which field pairs would be explored next (no API calls)
+    python nous.py autoloop --plan     # which field pairs would be explored next (no API calls); --min-shared N
     python nous.py autoloop --report   # log of past loop runs
 
   Maintenance
@@ -149,8 +149,14 @@ def cmd_sync():
     sync_hypotheses_to_chroma()
 
 
-def cmd_debate(query: str, model: str = DEFAULT_MODEL):
-    from nous.core import debate
+def cmd_debate(query: str, model: str = DEFAULT_MODEL, force: bool = False):
+    from nous.core import debate, previous_debates
+    prev = previous_debates(query)
+    if prev and not force:
+        print(f"This question was already debated (debate #{', #'.join(map(str, prev))}). "
+              "Repeating it mostly yields near-duplicate hypotheses; use a different question, "
+              "or add --force to run it again.")
+        return
     debate(query, model=model)
 
 
@@ -191,8 +197,13 @@ def cmd_calibrate():
 
 def cmd_autoloop(args: list[str]):
     from nous import loop
+    min_shared = loop.MIN_SHARED
+    if "--min-shared" in args:
+        i = args.index("--min-shared")
+        min_shared = int(args[i + 1])
+        args = args[:i] + args[i + 2:]
     if "--plan" in args:
-        loop.print_plan()
+        loop.print_plan(min_shared=min_shared)
         return
     if "--report" in args:
         loop.print_report()
@@ -204,7 +215,7 @@ def cmd_autoloop(args: list[str]):
         args = args[:i] + args[i + 2:]
     rest = [a for a in args if not a.startswith("--")]
     loop.autoloop(cycles=int(rest[0]) if rest else 1, per_pair=per_pair,
-                  abstract="--abstract" in args)
+                  abstract="--abstract" in args, min_shared=min_shared)
 
 
 def cmd_migrate_domains():
@@ -292,11 +303,13 @@ def main():
     elif cmd == "sync":
         cmd_sync()
     elif cmd == "debate":
+        force = "--force" in args
+        args = [a for a in args if a != "--force"]
         if len(args) < 2:
-            print("Usage: python nous.py debate <concept> [model]")
+            print("Usage: python nous.py debate <concept> [model] [--force]")
             return
         model = args[2] if len(args) > 2 else DEFAULT_MODEL
-        cmd_debate(args[1], model)
+        cmd_debate(args[1], model, force)
     elif cmd == "debates":
         cmd_debates()
     elif cmd == "abstract":

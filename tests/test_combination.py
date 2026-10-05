@@ -302,3 +302,24 @@ def test_fill_loose_and_titles_for_stored_pairs(tmp_path, monkeypatch):
     assert cb.fill_titles(C(), verbose=False) == 1           # only 1 <= joint < 10
     assert cb.load_titles("A", "B")[0]["title"] == "Paper" and cb.load_titles("A", "C") == []
     assert cb.combo_summary("hyp:1")["pair"]["loose"] == 5
+
+
+def test_claim_text_drops_the_structure_framing():
+    text = ("Concept A from [chemistry] (starch) and Concept B from [medicine] (tendon) share "
+            "structure Z (thermodynamic constraints governing polymer packing). This suggests "
+            "Hypothesis H: The localized density of proteoglycans in tendon matrix is governed "
+            "by liquid-liquid phase separation principles.")
+    assert cb.claim_text(text).startswith("The localized density of proteoglycans")
+    assert "polymer packing" not in cb.claim_text(text)
+    assert cb.claim_text("Plain hypothesis without a marker, but long enough to keep.") == \
+        "Plain hypothesis without a marker, but long enough to keep."
+    assert cb.claim_text("Hypothesis H: too short") == "Hypothesis H: too short"   # nothing useful after it
+
+
+def test_aggregate_excludes_novelty_from_loop_composite():
+    from nous.evaluation.runner import aggregate
+    rows = [{"target_ref": "hyp:1", "rater": "llm:m:A", "item": i, "score": s}
+            for i, s in (("novelty", 5.0), ("testability", 3.0), ("specificity", 3.0))]
+    a = aggregate(rows)[0]
+    assert a["composite_excl_novelty"] == pytest.approx(3.0)
+    assert a["composite"] == pytest.approx(11 / 3)

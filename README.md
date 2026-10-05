@@ -68,14 +68,17 @@ python nous.py migrate-domains     # 旧ドメイン名（physics 等）を Open
 ### 自律ループ（フェーズ4）
 
 ```bash
-python nous.py autoloop --plan            # 次に探索する分野ペアを表示（API 呼び出しなし）
+python nous.py autoloop --plan            # 次に探索する分野ペアと指標を表示（API 呼び出しなし）。--min-shared N
 python nous.py autoloop 3                 # 3サイクル：Voidペア → 橋渡し論文収集 → 仮説 → 評価 → 文献チェック → 採否
 python nous.py autoloop --report          # 実行履歴
 ```
 
-1サイクル: 分野共起 lift が低く未試行のペアを選ぶ → 両分野を架橋する論文を収集・埋め込み → 仮説を1つ生成 →
-LLM 評価 + `litcheck` + `combocheck` → **combocheck が `studied`、または lit-novelty が較正済みの「既出」目安以下なら棄却**、
-それ以外は採用して知識ベースへ還流。報酬 = 採用なら composite/5、棄却なら 0（過去に採用された分野を含むペアを優先）。
+1サイクル: **直接の共起（lift）は低いのに、他の分野との繋がり方が似ている**（隣同士の隙間）未試行の分野ペアを選ぶ
+（共有論文が `--min-shared`＝既定1,000本未満のペアは除外）→ 両分野を架橋する論文を収集・埋め込み →
+**その橋渡し論文を材料に**仮説を1つ生成 → LLM 評価 + `litcheck` + `combocheck`（仮説の主張に含まれる概念で判定）→
+**combocheck が `studied`、または lit-novelty が較正済みの「既出」目安以下なら棄却**、それ以外は採用して知識ベースへ還流。
+報酬 = 採用なら（新規性を除く rubric 複合点）/5、棄却なら 0（LLM の新規性採点は人間評価より甘く、相関もなかったため報酬に使わない）。
+サイクルの最後に仮説の本文・分解した概念・共起論文の題名を表示する。`debate` は同一の問いの繰り返しを拒否する（`--force` で実行）。
 「採用」は「これらのチェックでは既存文献に見つからなかった」の意味で、新発見の主張ではない。
 
 一通り実行しても API 費用は数セント程度（list/group_by は 1 回 $0.0001）。

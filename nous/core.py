@@ -141,6 +141,18 @@ Respond ONLY with JSON:
         return {"verdict": f"[synthesis error: {ex}]", "confidence": 0.0}
 
 
+def previous_debates(query: str) -> list[int]:
+    """Ids of earlier debates with exactly the same question (case/space-insensitive)."""
+    _ensure_debate_tables()
+    key = " ".join(query.lower().split())
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = conn.execute("SELECT id, query FROM debates").fetchall()
+    finally:
+        conn.close()
+    return [i for i, q in rows if " ".join((q or "").lower().split()) == key]
+
+
 # ------------------------------------------------------------------ #
 #  Main debate orchestration                                          #
 # ------------------------------------------------------------------ #

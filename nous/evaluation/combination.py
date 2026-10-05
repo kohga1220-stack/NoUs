@@ -175,6 +175,24 @@ def summarize(concept_counts: dict[str, int], pairs: list[dict],
             "robust": robust}
 
 
+_CLAIM_MARKERS = re.compile(r"hypothesis\s*(?:h)?\s*[:：]", re.IGNORECASE)
+
+
+def claim_text(text: str) -> str:
+    """
+    The specific claim of a hypothesis. Nous hypotheses are often written as
+    'Concept A from [X] and concept B from [Y] share structure Z ... Hypothesis H: <claim>'.
+    The concepts of the claim, not of the 'structure Z' framing, are what a literature check
+    should test; so keep only what follows the last 'Hypothesis H:' marker when there is one.
+    """
+    last = None
+    for m in _CLAIM_MARKERS.finditer(text):
+        last = m
+    if last and len(text[last.end():].strip()) >= 40:
+        return text[last.end():].strip()
+    return text
+
+
 def parse_concepts(data) -> list[str]:
     """LLM JSON -> 2..4 distinct sanitized concepts (pure)."""
     raw = data.get("concepts", []) if isinstance(data, dict) else []
@@ -332,9 +350,11 @@ Rules:
 - Do NOT use labels the hypothesis itself invented. Replace them with the standard term for
   the underlying idea.
 - Prefer concepts from different fields.
+- Take the concepts from the SPECIFIC CLAIM: the object or phenomenon it is about and the
+  mechanism or principle it proposes. Ignore generic framing such as "shared structure".
 
-HYPOTHESIS:
-{text[:1500]}
+HYPOTHESIS CLAIM:
+{claim_text(text)[:1500]}
 
 Respond ONLY with JSON: {{"concepts": ["...", "..."]}}"""
     return parse_concepts(generate_json(prompt, model=model))

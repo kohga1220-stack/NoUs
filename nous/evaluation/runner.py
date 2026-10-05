@@ -147,6 +147,10 @@ def aggregate(rows: list[dict]) -> list[dict]:
             "ref": ref,
             "item_means": means,
             "composite": float(np.mean(list(means.values()))),
+            # LLM novelty ratings were much more lenient than a careful human and uncorrelated
+            # with it (n=10), so the autonomous loop does not reward them
+            "composite_excl_novelty": (float(np.mean([v for k, v in means.items() if k != "novelty"]))
+                                       if any(k != "novelty" for k in means) else None),
             "n_raters": len(raters[ref]),
             "novelty_embedding": auto[ref].get("novelty_embedding"),
             "novelty_literature": auto[ref].get("novelty_literature"),

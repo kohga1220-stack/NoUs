@@ -174,3 +174,17 @@ def test_known_threshold_from_controls_table(tmp_path, monkeypatch):
                     [("a", 0.1), ("b", 0.2), ("c", 0.3), ("d", 0.4)])
     con.commit(); con.close()
     assert literature.known_threshold() == pytest.approx(0.325)
+
+
+def test_previous_debates_matches_identical_questions(tmp_path, monkeypatch):
+    import sqlite3
+    from nous import core
+    db = tmp_path / "n.db"
+    monkeypatch.setattr(core, "DB_PATH", db)
+    core._ensure_debate_tables()
+    con = sqlite3.connect(db)
+    con.execute("INSERT INTO debates (query, verdict) VALUES (?, '{}')",
+                ("How material properties shape emotion",))
+    con.commit(); con.close()
+    assert core.previous_debates("  how MATERIAL properties   shape emotion ") == [1]
+    assert core.previous_debates("something else") == []

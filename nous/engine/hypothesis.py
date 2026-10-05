@@ -18,7 +18,7 @@ def build_prompt(query: str, connections: list[dict], bridges: list[dict]) -> st
     bridge_text = "\n".join(
         f"- [{b['domain']}] {b['title']}: {b['summary'][:200]}"
         for b in bridges
-    )
+    ) or "(none)"
     return f"""You are Nous, an AI that discovers novel connections between distant fields of human knowledge.
 
 QUERY: {query}
@@ -50,9 +50,18 @@ def generate_hypothesis(
     model: str = DEFAULT_MODEL,
     n_connections: int = 8,
     save: bool = True,
+    context: list[dict] | None = None,
 ) -> dict:
-    connections = find_cross_domain_connections(query, n_results=n_connections, llm_model=model)
-    bridges     = find_bridge(query, connections[0]["title"] if connections else query, n=4)
+    """
+    `context` (optional): articles ({domain, title, summary}) to build the hypothesis from,
+    instead of searching the whole knowledge base. The autonomous loop passes the works
+    that bridge the two chosen fields, so the hypothesis is about that pair.
+    """
+    if context is not None:
+        connections, bridges = context, []
+    else:
+        connections = find_cross_domain_connections(query, n_results=n_connections, llm_model=model)
+        bridges     = find_bridge(query, connections[0]["title"] if connections else query, n=4)
 
     prompt = build_prompt(query, connections, bridges)
 

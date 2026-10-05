@@ -1,39 +1,68 @@
-import sqlite3
-
 import pytest
 
 from nous import loop
 from nous.collector import openalex
 
 
-def L(a, b, lift, observed=100):
-    return {"field_a": a, "field_b": b, "name_a": a, "name_b": b,
-            "observed": observed, "lift": lift}
+def _system(extra_gap=False):
+    """
+    Two clusters of neighbouring fields: x1..x3 and y1..y3. Within a cluster fields meet often
+    (high lift); across clusters rarely. x1-x2 is a *gap between neighbours*: same links to
+    everything else, but a low direct lift.
+    """
+    xs, ys = ["x1", "x2", "x3"], ["y1", "y2", "y3"]
+    links = []
+
+    def add(a, b, lift, obs):
+        links.append({"field_a": a, "field_b": b, "name_a": a, "name_b": b,
+                      "lift": lift, "observed": obs})
+
+    for grp in (xs, ys):
+        for i, a in enumerate(grp):
+            for b in grp[i + 1:]:
+                add(a, b, 5.0, 50_000)
+    for a in xs:
+        for b in ys:
+            add(a, b, 0.1, 5_000)
+    for l in links:
+        if (l["field_a"], l["field_b"]) == ("x1", "x2"):
+            l["lift"], l["observed"] = 0.05, 3_000
+        if extra_gap and (l["field_a"], l["field_b"]) == ("y1", "y2"):
+            l["lift"], l["observed"] = 0.06, 3_000
+    return links
 
 
-LINKS = [L("1", "2", 0.5), L("3", "4", 0.1), L("5", "6", 0.3), L("7", "8", 0.05, observed=0)]
+def test_choose_pair_prefers_a_gap_between_neighbours_over_unrelated_fields():
+    best = loop.choose_pair(_system(), [])
+    assert {best["field_a"], best["field_b"]} == {"x1", "x2"}
+    c = best["components"]
+    assert c["neighbour"] == pytest.approx(1.0) and c["void"] == pytest.approx(1.0)
+    # an unrelated cross-cluster pair has an opposite profile -> no priority
+    scores = loop.score_links(_system())
+    assert scores[frozenset(("x3", "y3"))]["neighbour"] < 0
 
 
-def test_choose_pair_takes_lowest_lift_and_skips_pairs_without_shared_works():
-    assert loop.choose_pair(LINKS, [])["field_a"] == "3"           # 0.1; the 0.05 pair has no works
-    assert loop.choose_pair([L("7", "8", 0.01, observed=0)], []) is None
+def test_pairs_sharing_too_few_works_are_skipped():
+    assert loop.choose_pair(_system(), [], min_shared=10_000)["observed"] >= 10_000
+    assert loop.choose_pair(_system(), [], min_shared=10 ** 9) is None
     assert loop.choose_pair([], []) is None
 
 
 def test_choose_pair_skips_tried_pairs_in_either_order():
-    hist = [{"field_a": "4", "field_b": "3", "reward": 0.0}]
-    assert loop.choose_pair(LINKS, hist)["field_a"] == "5"
+    hist = [{"field_a": "x2", "field_b": "x1", "reward": 0.0}]
+    best = loop.choose_pair(_system(), hist)
+    assert {best["field_a"], best["field_b"]} != {"x1", "x2"}
 
 
 def test_rewarded_fields_raise_priority_of_their_other_pairs():
-    links = [L("1", "2", 0.1), L("1", "3", 0.2), L("4", "5", 0.15)]
-    hist = [{"field_a": "1", "field_b": "9", "reward": 0.9}]
-    # without feedback the lowest lift wins; field 1 earned a reward so a pair with it overtakes
-    assert loop.choose_pair(links, [])["field_b"] == "2"
+    links = _system(extra_gap=True)
+    assert {loop.choose_pair(links, [])["field_a"]} == {"x1"}               # lowest lift first
+    hist = [{"field_a": "y1", "field_b": "y9", "reward": 0.9}]
     best = loop.choose_pair(links, hist, exploit_weight=1.0)
-    assert best["field_a"] == "1"
-    zero = [{"field_a": "1", "field_b": "9", "reward": 0.0}]
-    assert loop.choose_pair(links, zero, exploit_weight=1.0)["field_b"] == "2"
+    assert {best["field_a"], best["field_b"]} == {"y1", "y2"}
+    zero = [{"field_a": "y1", "field_b": "y9", "reward": 0.0}]
+    best = loop.choose_pair(links, zero, exploit_weight=1.0)
+    assert {best["field_a"], best["field_b"]} == {"x1", "x2"}
 
 
 def test_decide_rejects_only_on_evidence_of_prior_work():
@@ -50,16 +79,18 @@ def test_decide_rejects_only_on_evidence_of_prior_work():
 def test_reward_and_query():
     assert loop.reward_for(True, 4.0) == pytest.approx(0.8)
     assert loop.reward_for(False, 4.0) == 0.0 and loop.reward_for(True, None) == 0.0
-    assert loop.make_query(L("1", "2", 0.1), [{"title": "Bridge paper"}]) == "1 and 2: Bridge paper"
-    assert loop.make_query(L("1", "2", 0.1), []) == "1 and 2"
+    link = {"name_a": "1", "name_b": "2"}
+    assert loop.make_query(link, [{"title": "Bridge paper"}]) == "1 and 2: Bridge paper"
+    assert loop.make_query(link, []) == "1 and 2"
 
 
 def _steps(label="unexplored", lit=0.4, composite=4.0, fail=None, log=None):
     log = log if log is not None else []
 
-    def generate(q):
+    def generate(q, works):
         if fail == "generate":
             raise RuntimeError("ollama down")
+        log.append(f"works:{len(works)}")
         return {"id": 7}
 
     return loop.Steps(
@@ -70,6 +101,7 @@ def _steps(label="unexplored", lit=0.4, composite=4.0, fail=None, log=None):
         check=lambda ref: (label, lit),
         cutoff=lambda: 0.27,
         sync=lambda hid: log.append(f"sync:{hid}"),
+        describe=lambda ref: f"  hypothesis of {ref}",
     ), log
 
 
@@ -78,15 +110,16 @@ def env(tmp_path, monkeypatch):
     db = tmp_path / "n.db"
     monkeypatch.setattr(loop, "DB_PATH", db)
     monkeypatch.setattr(openalex, "DB_PATH", db)
-    monkeypatch.setattr(openalex, "load_field_links", lambda: LINKS)
+    monkeypatch.setattr(openalex, "load_field_links", lambda: _system())
     return db
 
 
-def test_cycle_accepts_and_syncs_only_accepted(env):
+def test_cycle_accepts_and_syncs_only_accepted(env, capsys):
     steps, log = _steps()
-    rec = loop.run_cycle(steps, verbose=False)
+    rec = loop.run_cycle(steps, verbose=True)
     assert rec["status"] == "accepted" and rec["hyp_ref"] == "hyp:7" and rec["reward"] == pytest.approx(0.8)
-    assert log == ["index", "sync:7"]
+    assert log == ["index", "works:1", "sync:7"]                    # the bridge works reach generation
+    assert "hypothesis of hyp:7" in capsys.readouterr().out
 
     steps, log = _steps(label="studied")
     rec = loop.run_cycle(steps, verbose=False)
@@ -99,15 +132,18 @@ def test_cycle_logs_errors_and_does_not_retry_same_pair(env):
     steps, _ = _steps(fail="generate")
     rec = loop.run_cycle(steps, verbose=False)
     assert rec["status"] == "error" and "ollama down" in rec["reason"]
-    assert loop.load_history()[0]["field_a"] == "3"
+    first = {loop.load_history()[0]["field_a"], loop.load_history()[0]["field_b"]}
     steps, _ = _steps()
-    assert loop.run_cycle(steps, verbose=False)["field_a"] == "5"        # moved on to the next pair
+    rec = loop.run_cycle(steps, verbose=False)
+    assert {rec["field_a"], rec["field_b"]} != first                # moved on to another pair
 
 
 def test_cycle_stops_when_no_pair_is_left(env):
-    for _ in range(3):
-        assert loop.run_cycle(_steps()[0], verbose=False)
-    assert loop.run_cycle(_steps()[0], verbose=False) is None
+    n = 0
+    while loop.run_cycle(_steps()[0], verbose=False, min_shared=1000):
+        n += 1
+        assert n < 100
+    assert n >= 1
 
 
 def test_report_and_plan_print(env, capsys):
@@ -115,4 +151,4 @@ def test_report_and_plan_print(env, capsys):
     loop.print_report()
     loop.print_plan(top=2)
     out = capsys.readouterr().out
-    assert "accepted" in out and "Next pairs" in out
+    assert "accepted" in out and "Next pairs" in out and "neighbour=" in out

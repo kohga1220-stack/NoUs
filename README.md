@@ -65,6 +65,19 @@ python nous.py trends              # 各分野の年次成長率と加速度
 python nous.py migrate-domains     # 旧ドメイン名（physics 等）を OpenAlex の分野名に統一（1回）
 ```
 
+### 自律ループ（フェーズ4）
+
+```bash
+python nous.py autoloop --plan            # 次に探索する分野ペアを表示（API 呼び出しなし）
+python nous.py autoloop 3                 # 3サイクル：Voidペア → 橋渡し論文収集 → 仮説 → 評価 → 文献チェック → 採否
+python nous.py autoloop --report          # 実行履歴
+```
+
+1サイクル: 分野共起 lift が低く未試行のペアを選ぶ → 両分野を架橋する論文を収集・埋め込み → 仮説を1つ生成 →
+LLM 評価 + `litcheck` + `combocheck` → **combocheck が `studied`、または lit-novelty が較正済みの「既出」目安以下なら棄却**、
+それ以外は採用して知識ベースへ還流。報酬 = 採用なら composite/5、棄却なら 0（過去に採用された分野を含むペアを優先）。
+「採用」は「これらのチェックでは既存文献に見つからなかった」の意味で、新発見の主張ではない。
+
 一通り実行しても API 費用は数セント程度（list/group_by は 1 回 $0.0001）。
 
 データは `data/`（SQLite・ChromaDB・raw テキスト・グラフHTML）に保存され、Git 管理外。

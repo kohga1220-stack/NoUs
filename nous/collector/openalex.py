@@ -338,6 +338,20 @@ def load_field_links() -> list[dict]:
     return [dict(zip(keys, r)) for r in rows]
 
 
+def collect_pair_bridges(link: dict, per_pair: int = 10) -> list[dict]:
+    """Fetch and save the most-cited works tagged with both fields of one pair; returns them."""
+    data = get("works", {
+        "filter": f"topics.field.id:{link['field_a']},topics.field.id:{link['field_b']},has_abstract:true",
+        "sort": "cited_by_count:desc",
+        "per_page": min(per_pair * 2, 100),
+        "select": "id,display_name,publication_year,abstract_inverted_index,primary_topic,cited_by_count",
+    })
+    works = [w for w in (parse_work(x) for x in data.get("results", [])) if w][:per_pair]
+    for w in works:
+        save_work(w)
+    return works
+
+
 def collect_void_bridges(top: int = 10, per_pair: int = 10, verbose: bool = True) -> int:
     """
     For the `top` lowest-lift field pairs that still have *some* shared works, fetch the
@@ -352,15 +366,7 @@ def collect_void_bridges(top: int = 10, per_pair: int = 10, verbose: bool = True
         return 0
     total = 0
     for l in links:
-        data = get("works", {
-            "filter": f"topics.field.id:{l['field_a']},topics.field.id:{l['field_b']},has_abstract:true",
-            "sort": "cited_by_count:desc",
-            "per_page": min(per_pair * 2, 100),
-            "select": "id,display_name,publication_year,abstract_inverted_index,primary_topic,cited_by_count",
-        })
-        works = [w for w in (parse_work(x) for x in data.get("results", [])) if w][:per_pair]
-        for w in works:
-            save_work(w)
+        works = collect_pair_bridges(l, per_pair)
         total += len(works)
         if verbose:
             print(f"  {l['name_a']} × {l['name_b']}  (lift={l['lift']:.3f}) → {len(works)} works")

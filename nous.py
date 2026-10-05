@@ -35,6 +35,11 @@ Usage:
     python nous.py fillvoids --openalex  # Collect works bridging the strongest void pairs
     python nous.py trends              # Growth & acceleration of each field
 
+  Autonomous loop (needs OPENALEX_API_KEY and Ollama)
+    python nous.py autoloop [cycles] [--per-pair N] [--abstract]   # void pair -> hypothesis -> checks -> accept/reject
+    python nous.py autoloop --plan     # which field pairs would be explored next (no API calls)
+    python nous.py autoloop --report   # log of past loop runs
+
   Maintenance
     python nous.py migrate-domains     # Rename legacy domains (physics, ...) to OpenAlex fields
 """
@@ -184,6 +189,24 @@ def cmd_calibrate():
     calibrate()
 
 
+def cmd_autoloop(args: list[str]):
+    from nous import loop
+    if "--plan" in args:
+        loop.print_plan()
+        return
+    if "--report" in args:
+        loop.print_report()
+        return
+    per_pair = 10
+    if "--per-pair" in args:
+        i = args.index("--per-pair")
+        per_pair = int(args[i + 1])
+        args = args[:i] + args[i + 2:]
+    rest = [a for a in args if not a.startswith("--")]
+    loop.autoloop(cycles=int(rest[0]) if rest else 1, per_pair=per_pair,
+                  abstract="--abstract" in args)
+
+
 def cmd_migrate_domains():
     from nous.migrate import migrate_domains
     migrate_domains()
@@ -294,6 +317,8 @@ def main():
     elif cmd == "combocheck":
         rest = [a for a in args[1:] if not a.startswith("--")]
         cmd_combocheck(rest[0] if rest else DEFAULT_MODEL, report_only="--report" in args)
+    elif cmd == "autoloop":
+        cmd_autoloop(args[1:])
     elif cmd == "migrate-domains":
         cmd_migrate_domains()
     elif cmd == "rate":

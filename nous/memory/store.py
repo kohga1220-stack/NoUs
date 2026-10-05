@@ -34,7 +34,7 @@ def get_recent_hypotheses(limit: int = 20) -> list[dict]:
     ]
 
 
-def sync_hypotheses_to_chroma():
+def sync_hypotheses_to_chroma(only_ids: set[int] | None = None):
     """
     Feed past hypotheses back into ChromaDB
     so they become part of the searchable knowledge base (self-growth).
@@ -42,6 +42,8 @@ def sync_hypotheses_to_chroma():
     from nous.engine.embedder import get_model, get_collection
 
     hyps = get_recent_hypotheses(limit=100)
+    if only_ids is not None:
+        hyps = [h for h in hyps if h["id"] in only_ids]
     if not hyps:
         return
 

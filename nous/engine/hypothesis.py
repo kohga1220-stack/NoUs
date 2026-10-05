@@ -68,12 +68,12 @@ def generate_hypothesis(
     result["sources"] = [r["title"] for r in connections[:5]]
 
     if save:
-        _save_hypothesis(query, result)
+        result["id"] = _save_hypothesis(query, result)
 
     return result
 
 
-def _save_hypothesis(query: str, result: dict):
+def _save_hypothesis(query: str, result: dict) -> int:
     domains = result.get("domains_connected") or []
     domain_a = domains[0] if len(domains) > 0 else "unknown"
     domain_b = domains[1] if len(domains) > 1 else "unknown"
@@ -96,8 +96,10 @@ def _save_hypothesis(query: str, result: dict):
         result.get("confidence", 0.5),
         json.dumps(result.get("sources", [])),
     ))
+    hypothesis_id = c.lastrowid
     conn.commit()
     conn.close()
+    return hypothesis_id
 
 
 if __name__ == "__main__":

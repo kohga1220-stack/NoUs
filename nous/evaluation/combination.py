@@ -554,7 +554,13 @@ def load_titles(a: str, b: str) -> list[dict]:
                             "WHERE concept_a = ? AND concept_b = ?", (a, b)).fetchall()
     finally:
         conn.close()
-    return [{"title": r[0], "year": r[1], "work_id": r[2]} for r in rows]
+    seen, out = set(), []
+    for title, year, work_id in rows:       # OpenAlex holds some papers as several records
+        key = (title or "").strip().lower()
+        if key not in seen:
+            seen.add(key)
+            out.append({"title": title, "year": year, "work_id": work_id})
+    return out
 
 
 def rank_candidates(items: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
@@ -627,13 +633,14 @@ def print_report():
 
 
 def check_combinations(refs: list[str] | None = None, model: str = DEFAULT_MODEL,
-                       verbose: bool = True) -> int:
+                       verbose: bool = True, with_references: bool = True) -> int:
     """
     1. reference pairs  2. decompose + count new hypotheses  3. adjacency / loose counts / titles for stored pairs
     4. re-score every stored hypothesis  5. print the report.
     """
     counter = Counter()
-    measure_references(counter, verbose)
+    if with_references:
+        measure_references(counter, verbose)
 
     targets = store.load_targets()
     if refs:

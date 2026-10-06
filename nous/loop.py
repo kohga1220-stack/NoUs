@@ -14,8 +14,9 @@ One cycle
   5. judge    LLM rubric (5 judges) + embedding novelty
   6. check    litcheck (closest prior work) and combocheck on the concepts of the hypothesis's
               own claim (is that pairing already studied?)
-  7. decide   REJECT when combocheck says `studied` or the lit-novelty is at/below the
-              calibrated "known" cut-off; otherwise ACCEPT and feed it back into the
+  7. decide   REJECT when combocheck says `studied`, the lit-novelty is at/below the
+              calibrated "known" cut-off, or the rubric composite (without novelty) is below the
+              median of the stored hypotheses; otherwise ACCEPT and feed it back into the
               knowledge base (`sync`). Every cycle is logged in `loop_runs`.
 
 reward = (rubric composite WITHOUT the novelty item) / 5 for an accepted hypothesis, 0 for a
@@ -31,7 +32,9 @@ from typing import Callable
 
 from nous.config import DB_PATH, DEFAULT_MODEL
 
-EXPLOIT_WEIGHT = 0.5      # how strongly past rewards of a pair's fields raise its priority
+EXPLOIT_WEIGHT = 0.1      # how strongly past rewards of a pair's fields raise its priority
+MIN_VOID = 0.5            # only the lower-lift half of all field pairs counts as a gap
+MIN_STORED_FOR_FLOOR = 10 # quality floor needs at least this many stored hypotheses
 MIN_SHARED = 1000         # heuristic: pairs sharing fewer works are mostly noise / mis-tagged
 
 
@@ -82,11 +85,14 @@ def score_links(links: list[dict]) -> dict[frozenset, dict]:
 
 
 def choose_pair(links: list[dict], history: list[dict], tried_limit: int = 1,
-                exploit_weight: float = EXPLOIT_WEIGHT, min_shared: int = MIN_SHARED) -> dict | None:
+                exploit_weight: float = EXPLOIT_WEIGHT, min_shared: int = MIN_SHARED,
+                min_void: float = MIN_VOID) -> dict | None:
     """
     Pick the next field pair. links: field_links rows ({field_a, field_b, observed, lift, ...}).
     history: past runs ({field_a, field_b, reward}).
-    Skipped: pairs tried `tried_limit` times, pairs sharing fewer than `min_shared` works.
+    Skipped: pairs tried `tried_limit` times, pairs sharing fewer than `min_shared` works, and
+    pairs outside the lower-lift part of all pairs (`void` < `min_void`: they meet about as
+    often as chance, so there is no gap).
     priority = void * max(neighbour, 0) + exploit_weight * mean reward of past runs that
     touched either field. The chosen link is returned with its components under "components".
     """
@@ -105,6 +111,8 @@ def choose_pair(links: list[dict], history: list[dict], tried_limit: int = 1,
         if l["observed"] < max(min_shared, 1) or k not in scores or tried.get(k, 0) >= tried_limit:
             continue
         comp = scores[k]
+        if comp["void"] < min_void:
+            continue
         rs = field_rewards.get(l["field_a"], []) + field_rewards.get(l["field_b"], [])
         bonus = exploit_weight * (sum(rs) / len(rs)) if rs else 0.0
         priority = comp["void"] * max(comp["neighbour"], 0.0) + bonus
@@ -114,18 +122,35 @@ def choose_pair(links: list[dict], history: list[dict], tried_limit: int = 1,
 
 
 def decide(combo_label: str | None, lit_novelty: float | None,
-           lit_cutoff: float | None) -> tuple[bool, str]:
-    """Accept or reject from the literature checks only. Returns (accepted, reason)."""
+           lit_cutoff: float | None, composite: float | None = None,
+           floor: float | None = None) -> tuple[bool, str]:
+    """
+    Accept or reject: prior work found by the literature checks, or a rubric composite
+    (without novelty) below `floor` (the median of the stored hypotheses). Returns (accepted, reason).
+    """
     if combo_label == "studied":
         return False, "combination already studied (>= 10 joint papers)"
     if lit_novelty is not None and lit_cutoff is not None and lit_novelty <= lit_cutoff:
         return False, f"lit-novelty {lit_novelty:.2f} <= known cut-off {lit_cutoff:.2f}"
+    if composite is not None and floor is not None and composite < floor:
+        return False, f"rubric composite {composite:.2f} below the median {floor:.2f} of stored hypotheses"
     notes = []
     if combo_label in (None, "unrecognized_terms", "inconclusive"):
         notes.append(f"combination unverified ({combo_label or 'not checked'})")
     if lit_novelty is None or lit_cutoff is None:
         notes.append("lit-novelty not compared with a cut-off")
+    if floor is None:
+        notes.append("no quality floor yet (too few stored hypotheses)")
     return True, "; ".join(notes) if notes else "not found in the literature by these checks"
+
+
+def quality_floor(composites: list[float | None]) -> float | None:
+    """Median of the stored hypotheses' composites (None until there are enough of them)."""
+    vals = sorted(c for c in composites if c is not None)
+    if len(vals) < MIN_STORED_FOR_FLOOR:
+        return None
+    mid = len(vals) // 2
+    return vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
 
 
 def reward_for(accepted: bool, composite: float | None) -> float:
@@ -193,9 +218,13 @@ class Steps:
     cutoff: Callable[[], float | None]
     sync: Callable[[int], None]                     # accepted hypothesis id -> knowledge base
     describe: Callable[[str], str] | None = None    # ref -> text shown after the cycle
+    floor: Callable[[], float | None] | None = None # median composite of stored hypotheses
 
 
-def default_steps(model: str = DEFAULT_MODEL, abstract: bool = False) -> Steps:
+def default_steps(model: str = DEFAULT_MODEL, abstract: bool = False,
+                  gen_model: str | None = None) -> Steps:
+    """`gen_model` (default: `model`) is used only to write the hypothesis; judging and the
+    concept decomposition keep `model` so ratings stay comparable with the stored ones."""
     def collect(link, per_pair):
         from nous.collector.openalex import collect_pair_bridges
         from nous.collector.wikipedia import init_db
@@ -213,7 +242,7 @@ def default_steps(model: str = DEFAULT_MODEL, abstract: bool = False) -> Steps:
         from nous.engine.hypothesis import generate_hypothesis
         context = [{"domain": w["field"], "title": w["title"], "summary": w["summary"]}
                    for w in works[:8]]
-        return generate_hypothesis(query, model=model, context=context or None)
+        return generate_hypothesis(query, model=gen_model or model, context=context or None)
 
     def judge(ref):
         from nous.evaluation import store
@@ -255,13 +284,19 @@ def default_steps(model: str = DEFAULT_MODEL, abstract: bool = False) -> Steps:
             conn.close()
         lines = [f"  hypothesis: {text[:400]}"]
         for p in pairs:
+            adj = f"{p['adjacency']:.2f}" if p.get("adjacency") is not None else "n/a"
             lines.append(f"  concepts: {p['a']} × {p['b']}  joint={p['joint']} loose={p['loose']} "
-                         f"adjacency={p['adjacency']}")
+                         f"adjacency={adj}")
             for w in load_titles(p["a"], p["b"])[:3]:
                 lines.append(f"    - {w['title'][:90]} ({w['year']})")
         return "\n".join(lines)
 
-    return Steps(collect, index, generate, judge, check, cutoff, sync, describe)
+    def floor():
+        from nous.evaluation import store
+        from nous.evaluation.runner import aggregate
+        return quality_floor([a["composite_excl_novelty"] for a in aggregate(store.load_scores())])
+
+    return Steps(collect, index, generate, judge, check, cutoff, sync, describe, floor)
 
 
 # ------------------------------------------------------------------ #
@@ -295,7 +330,9 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
         rec["hyp_ref"] = f"hyp:{hid}"
         rec["composite"] = steps.judge(rec["hyp_ref"])
         rec["combo_label"], rec["lit_novelty"] = steps.check(rec["hyp_ref"])
-        accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff())
+        floor = steps.floor() if steps.floor else None
+        accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff(),
+                                  rec["composite"], floor)
         rec["status"], rec["reason"] = ("accepted" if accepted else "rejected"), reason
         rec["reward"] = reward_for(accepted, rec["composite"])
         if accepted:
@@ -316,8 +353,9 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
 
 
 def autoloop(cycles: int = 1, per_pair: int = 10, model: str = DEFAULT_MODEL,
-             abstract: bool = False, verbose: bool = True, min_shared: int = MIN_SHARED) -> list[dict]:
-    steps = default_steps(model=model, abstract=abstract)
+             abstract: bool = False, verbose: bool = True, min_shared: int = MIN_SHARED,
+             gen_model: str | None = None) -> list[dict]:
+    steps = default_steps(model=model, abstract=abstract, gen_model=gen_model)
     out = []
     for _ in range(cycles):
         rec = run_cycle(steps, per_pair=per_pair, verbose=verbose, min_shared=min_shared)

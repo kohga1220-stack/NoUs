@@ -37,6 +37,7 @@ Usage:
 
   Autonomous loop (needs OPENALEX_API_KEY and Ollama)
     python nous.py autoloop [cycles] [--per-pair N] [--abstract]   # void pair -> hypothesis -> checks -> accept/reject
+    python nous.py autoloop 1 --gen-model M   # write the hypothesis with a different (e.g. larger) Ollama model
     python nous.py autoloop --plan     # which field pairs would be explored next (no API calls); --min-shared N
     python nous.py autoloop --report   # log of past loop runs
 
@@ -213,9 +214,14 @@ def cmd_autoloop(args: list[str]):
         i = args.index("--per-pair")
         per_pair = int(args[i + 1])
         args = args[:i] + args[i + 2:]
+    gen_model = None
+    if "--gen-model" in args:
+        i = args.index("--gen-model")
+        gen_model = args[i + 1]
+        args = args[:i] + args[i + 2:]
     rest = [a for a in args if not a.startswith("--")]
     loop.autoloop(cycles=int(rest[0]) if rest else 1, per_pair=per_pair,
-                  abstract="--abstract" in args, min_shared=min_shared)
+                  abstract="--abstract" in args, min_shared=min_shared, gen_model=gen_model)
 
 
 def cmd_migrate_domains():

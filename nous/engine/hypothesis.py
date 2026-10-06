@@ -45,6 +45,36 @@ Format your response as JSON:
 }}"""
 
 
+def build_bridge_prompt(query: str, works: list[dict]) -> str:
+    """Prompt for the autonomous loop: a specific, falsifiable claim from works bridging two fields."""
+    listing = "\n".join(f"- [{w['domain']}] {w['title']}: {w['summary'][:300]}" for w in works)
+    return f"""You are Nous, an AI that proposes research hypotheses at the boundary of two fields.
+
+BOUNDARY: {query}
+
+HIGHLY CITED WORKS THAT BRIDGE THE TWO FIELDS:
+{listing}
+
+Propose ONE hypothesis that connects ideas from these works.
+Rules:
+- Name the specific object or phenomenon AND the specific mechanism or quantitative relation
+  you propose (for example: "X scales with Y because of Z").
+- Do NOT write "Concept A from ... and Concept B from ... share structure Z".
+- Do NOT give a methodological platitude ("better measurement is needed", "standardization is
+  important", "more integration would help").
+- It must be checkable with a concrete experiment or data analysis. State it in 1-2 sentences.
+- Use the standard terminology of the fields.
+
+Respond ONLY with JSON:
+{{
+  "structural_pattern": "...",
+  "hypothesis": "...",
+  "confidence": 0.0-1.0,
+  "validation_question": "...",
+  "domains_connected": ["field1", "field2"]
+}}"""
+
+
 def generate_hypothesis(
     query: str,
     model: str = DEFAULT_MODEL,
@@ -63,7 +93,8 @@ def generate_hypothesis(
         connections = find_cross_domain_connections(query, n_results=n_connections, llm_model=model)
         bridges     = find_bridge(query, connections[0]["title"] if connections else query, n=4)
 
-    prompt = build_prompt(query, connections, bridges)
+    prompt = build_bridge_prompt(query, connections) if context is not None \
+        else build_prompt(query, connections, bridges)
 
     print(f"Generating hypothesis via {model}...")
     raw = generate(prompt, model=model)

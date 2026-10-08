@@ -4,7 +4,7 @@
 
 ## セットアップ
 
-Google Colab で動かす場合は `notebooks/nous_colab.ipynb` を開いて上から実行（PC のメモリを使わない）。
+Google Colab で動かす場合は `notebooks/nous_colab.ipynb` を開き、セッション開始時に「ワンセット準備」の1セルを実行（PC のメモリを使わない）。空の `nous.db` で Drive を上書きしないよう、データ読み込みと `save()` に保護が入っている（`nous/colab_setup.py`）。
 
 ### ローカル
 

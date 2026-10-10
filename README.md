@@ -88,6 +88,8 @@ python nous.py autoloop --report          # 実行履歴
 
 ## 構成
 
+構成図（Mermaid）は [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+
 | パス | 役割 |
 |---|---|
 | `nous/config.py` | パス・既定モデル |

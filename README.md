@@ -43,11 +43,11 @@ python nous.py abstract [limit]    # 各記事を「分野語を使わない構�
 | 指定 | 呼び出し先 | 必要な環境変数 |
 |---|---|---|
 | `gemma4:e2b`（接頭辞なし）/ `ollama:gemma4:e2b` | ローカル Ollama | なし |
-| `opencode:glm-5.3-flash` | OpenCode Console（OpenAI 互換 API。**有料・従量課金**） | `OPENCODE_API_KEY` |
+| `opencode:<有料ID>` | OpenCode Console（OpenAI 互換 API）。**現在は使わない方針**（`-free` は API で使えず、有料IDの動作は未確認） | `OPENCODE_API_KEY` |
 | `gemini:gemini-3.6-flash` | Gemini API | `GEMINI_API_KEY` |
 
 ```bash
-python nous.py evaluate --judges gemma4:e2b,opencode:glm-5.3-flash,gemini:gemini-3.6-flash
+python nous.py evaluate --judges gemma4:e2b,gemini:gemini-3.6-flash
 python nous.py reliability         # 審査員どうし・人間との一致度で比べる
 ```
 

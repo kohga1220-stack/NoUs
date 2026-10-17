@@ -42,6 +42,7 @@ Usage:
     python nous.py autoloop --report   # log of past loop runs
 
   Maintenance
+    python nous.py check-llm [model ...]   # one tiny request per model: are the key and model ID usable? (exit 1 on failure)
     python nous.py migrate-domains     # Rename legacy domains (physics, ...) to OpenAlex fields
 """
 import sys
@@ -224,6 +225,14 @@ def cmd_autoloop(args: list[str]):
                   abstract="--abstract" in args, min_shared=min_shared, gen_model=gen_model)
 
 
+def cmd_check_llm(models: list[str]) -> bool:
+    from nous.llm import check_models
+    results = check_models(models or [DEFAULT_MODEL])
+    for r in results:
+        print(f"{'OK ' if r['ok'] else 'NG '} {r['model']:40s} {r['seconds']:5.1f}s  {r['detail']}")
+    return all(r["ok"] for r in results)
+
+
 def cmd_migrate_domains():
     from nous.migrate import migrate_domains
     migrate_domains()
@@ -338,6 +347,9 @@ def main():
         cmd_combocheck(rest[0] if rest else DEFAULT_MODEL, report_only="--report" in args)
     elif cmd == "autoloop":
         cmd_autoloop(args[1:])
+    elif cmd == "check-llm":
+        if not cmd_check_llm([a for a in args[1:] if not a.startswith("--")]):
+            sys.exit(1)
     elif cmd == "migrate-domains":
         cmd_migrate_domains()
     elif cmd == "rate":

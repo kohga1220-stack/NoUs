@@ -177,3 +177,27 @@ def generate_json(prompt: str, model: str = DEFAULT_MODEL, retries: int = 2) -> 
         except ValueError as ex:        # json.JSONDecodeError is a ValueError
             last_error = ex
     raise last_error
+
+
+CHECK_PROMPT = "Reply with the single word OK."
+
+
+def check_models(models: list[str], gen=None) -> list[dict]:
+    """
+    Send one tiny prompt to each model and report whether it answered, and how fast.
+    Used to verify keys and model IDs before a long run. A failure is reported, not raised;
+    the error text is what the provider call raised (it never contains the API key).
+    """
+    import time
+    gen = gen or generate
+    out = []
+    for m in models:
+        t0 = time.time()
+        try:
+            answer = gen(CHECK_PROMPT, model=m).strip()
+            out.append({"model": m, "ok": bool(answer), "seconds": time.time() - t0,
+                        "detail": answer[:60] or "empty answer"})
+        except Exception as ex:                     # network, key, model ID, quota ...
+            out.append({"model": m, "ok": False, "seconds": time.time() - t0,
+                        "detail": f"{type(ex).__name__}: {str(ex)[:200]}"})
+    return out

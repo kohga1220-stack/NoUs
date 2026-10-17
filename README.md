@@ -65,6 +65,7 @@ python nous.py rate <name>         # 人間が同じルーブリックで採点
 python nous.py scores              # 総合点ランキング
 python nous.py reliability         # 一致度：LLM審査員どうし／人間 × LLM平均（r・ICC・甘さの偏り）
 python nous.py evaluate --judges gemma4:e2b,llama3.2:3b,qwen2.5:3b   # 別モデルを審査員に
+python nous.py check-llm gemini:gemini-3.6-flash  # 各モデルに極小リクエストを1回送り、キー・モデルIDが使えるか確認（失敗なら終了コード1）
 python nous.py litcheck            # OpenAlex 意味検索で最も近い既存論文を探し lit-novelty を記録
 python nous.py calibrate           # 有名な理論10個の lit-novelty を測り「既出」の目安を作る（scores に ⚑）
 python nous.py combocheck          # 仮説を2〜4概念に分解し、概念ペアの共起論文数と隣接性で「未踏の組み合わせ」を探す（★=橋渡し候補）

@@ -129,14 +129,27 @@ def _generate_opencode(prompt: str, name: str) -> str:
     return data["choices"][0]["message"]["content"] or ""
 
 
+class EmptyResponseError(RuntimeError):
+    """The API answered but returned no text (blocked, filtered, or empty). Not retried."""
+
+
 def _generate_gemini(prompt: str, name: str) -> str:
     data = _post_json(
         f"{GEMINI_BASE_URL}/models/{name}:generateContent",
         {"x-goog-api-key": _api_key("GEMINI_API_KEY")},
         {"contents": [{"parts": [{"text": prompt}]}]},
     )
-    parts = data["candidates"][0]["content"]["parts"]
-    return "".join(p.get("text", "") for p in parts)
+    candidates = data.get("candidates") or []
+    if not candidates:
+        # no candidate at all: typically the prompt was blocked (promptFeedback.blockReason)
+        reason = (data.get("promptFeedback") or {}).get("blockReason", "unknown")
+        raise EmptyResponseError(f"Gemini returned no candidates (blockReason: {reason})")
+    parts = ((candidates[0].get("content") or {}).get("parts")) or []
+    text = "".join(p.get("text", "") for p in parts)
+    if not text:
+        reason = candidates[0].get("finishReason", "unknown")
+        raise EmptyResponseError(f"Gemini returned an empty answer (finishReason: {reason})")
+    return text
 
 
 def generate(prompt: str, model: str = DEFAULT_MODEL) -> str:

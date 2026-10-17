@@ -54,6 +54,33 @@ def test_gemini_request_and_parse(monkeypatch):
     assert seen["headers"] == {"x-goog-api-key": "g"}
 
 
+@pytest.mark.parametrize("reply, expected", [
+    ({"promptFeedback": {"blockReason": "SAFETY"}}, "blockReason: SAFETY"),         # no candidates
+    ({"candidates": []}, "blockReason: unknown"),
+    ({"candidates": [{"finishReason": "SAFETY"}]}, "finishReason: SAFETY"),         # no content
+    ({"candidates": [{"content": {"parts": []}, "finishReason": "MAX_TOKENS"}]}, "finishReason: MAX_TOKENS"),
+    ({"candidates": [{"content": {"parts": [{"text": ""}]}}]}, "finishReason: unknown"),
+])
+def test_gemini_empty_response_is_a_clear_error_and_is_not_retried(monkeypatch, reply, expected):
+    monkeypatch.setenv("GEMINI_API_KEY", "g")
+    calls = _scripted(monkeypatch, [(200, reply), (200, {"candidates": [{"content": {"parts": [{"text": "late"}]}}]})])
+    with pytest.raises(llm.EmptyResponseError, match=expected):
+        llm.generate("q", model="gemini:m")
+    assert len(calls) == 1                                    # one HTTP call, no retry
+    calls = _scripted(monkeypatch, [(200, reply)] * 3)
+    with pytest.raises(llm.EmptyResponseError):
+        llm.generate_json("q", model="gemini:m")
+    assert len(calls) == 1                                    # generate_json retries only ValueError
+
+
+def test_gemini_error_message_does_not_contain_the_prompt_or_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRETKEY")
+    _scripted(monkeypatch, [(200, {"promptFeedback": {"blockReason": "SAFETY"}})])
+    with pytest.raises(llm.EmptyResponseError) as ei:
+        llm.generate("PRIVATE PROMPT", model="gemini:m")
+    assert "SECRETKEY" not in str(ei.value) and "PRIVATE PROMPT" not in str(ei.value)
+
+
 def test_missing_key_raises_without_leaking(monkeypatch):
     monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="OPENCODE_API_KEY"):

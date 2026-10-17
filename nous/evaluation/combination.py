@@ -29,6 +29,13 @@ A Nous hypothesis combines established ideas from different fields. It is decomp
    survives rewording (`robust`); otherwise the phrase count was just too narrow. For pairs
    with 1-9 joint works the most-cited titles are stored so a human can read who combined them.
 
+4. WHOLE COMBINATION  (3 or more concepts)
+   The hypothesis claims all of its concepts *together*. Checking pairs alone can call a
+   hypothesis novel because one pair is rare while the other pairs are well studied (or the
+   reverse). For 3+ concepts the works matching ALL of them (`A AND B AND C`) are counted too
+   (strict phrases, and loosely if fewer than STUDIED_MIN). When that count is informative it
+   decides the verdict; the pairs stay as supporting detail.
+
 Reference pairs (famous combinations and deliberately unrelated ones) are measured every
 time so the numbers can be read against a scale.
 Cost: about 10 count queries + 1 group_by per concept per hypothesis at $0.0001 each.
@@ -138,41 +145,51 @@ def adjacency_threshold(known: list[float], unrelated: list[float]) -> float | N
     return (min(known) + max(unrelated)) / 2
 
 
+def is_group_informative(group: dict | None) -> bool:
+    """A whole-combination count says something unless it is zero AND a concept is too narrow."""
+    return bool(group) and (group["joint"] > 0 or group.get("n_min", 0) >= MIN_COMMON)
+
+
 def summarize(concept_counts: dict[str, int], pairs: list[dict],
-              adj_threshold: float | None = None) -> dict:
+              adj_threshold: float | None = None, group: dict | None = None) -> dict:
     """
-    One verdict per hypothesis, from its most novel *informative* pair.
+    One verdict per hypothesis.
 
       unrecognized_terms  a concept has < MIN_KNOWN works (not a standard term)
       inconclusive        every pair has zero joint works and a too-narrow concept
-      unexplored          an informative pair with joint == 0
-      few_papers          fewest joint works is 1..9
-      studied             every informative pair has >= 10 joint works
+      unexplored          joint == 0
+      few_papers          joint is 1..9
+      studied             joint >= 10
 
+    `joint` is that of the WHOLE combination (`group`, 3+ concepts) when it is informative,
+    otherwise that of the most novel informative pair.
     combo_novelty: 1.0 unexplored, 1 - joint/10 for few_papers, 0.0 studied, None otherwise.
-    bridge_candidate: unexplored / few_papers AND the pair's literatures are neighbours
-    (adjacency >= adj_threshold).
+    bridge_candidate: unexplored / few_papers AND the literatures are neighbours
+    (adjacency of the rarest pair >= adj_threshold).
     robust: the gap also survives the loose (reworded) count, i.e. loose < STUDIED_MIN.
     """
     if not pairs or any(n < MIN_KNOWN for n in concept_counts.values()):
         return {"label": "unrecognized_terms", "combo_novelty": None, "pair": None,
-                "bridge_candidate": False, "robust": False}
+                "bridge_candidate": False, "robust": False, "group": group}
     informative = [p for p in pairs if is_informative(p)]
-    if not informative:
+    use_group = is_group_informative(group)
+    if not informative and not use_group:
         return {"label": "inconclusive", "combo_novelty": None, "pair": None,
-                "bridge_candidate": False, "robust": False}
-    best = min(informative, key=lambda p: (p["joint"], -(p.get("adjacency") or 0.0)))
-    status = pair_status(best)
+                "bridge_candidate": False, "robust": False, "group": group}
+    best = (min(informative, key=lambda p: (p["joint"], -(p.get("adjacency") or 0.0)))
+            if informative else max(pairs, key=lambda p: p.get("adjacency") or 0.0))
+    decider = group if use_group else best
+    status = pair_status(decider)
     label = {"none": "unexplored", "few_papers": "few_papers", "studied": "studied"}[status]
-    novelty = {"unexplored": 1.0, "few_papers": round(1.0 - best["joint"] / STUDIED_MIN, 4),
+    novelty = {"unexplored": 1.0, "few_papers": round(1.0 - decider["joint"] / STUDIED_MIN, 4),
                "studied": 0.0}[label]
     adj = best.get("adjacency")
     bridge = (label in ("unexplored", "few_papers") and adj is not None
               and adj_threshold is not None and adj >= adj_threshold)
-    loose = best.get("loose")
+    loose = decider.get("loose")
     robust = label != "studied" and loose is not None and loose < STUDIED_MIN
     return {"label": label, "combo_novelty": novelty, "pair": best, "bridge_candidate": bridge,
-            "robust": robust}
+            "robust": robust, "group": group, "decided_by": "whole" if use_group else "pair"}
 
 
 _CLAIM_MARKERS = re.compile(r"hypothesis\s*(?:h)?\s*[:：]", re.IGNORECASE)
@@ -352,6 +369,9 @@ Rules:
 - Prefer concepts from different fields.
 - Take the concepts from the SPECIFIC CLAIM: the object or phenomenon it is about and the
   mechanism or principle it proposes. Ignore generic framing such as "shared structure".
+- ONE of the concepts must be the PHENOMENON or quantity the claim explains or predicts
+  (for example "suspense", "tendon stiffness", "opinion polarization"), not only the tools or
+  theories used to describe it.
 
 HYPOTHESIS CLAIM:
 {claim_text(text)[:1500]}
@@ -373,6 +393,10 @@ def _ensure_table(conn):
             PRIMARY KEY (target_ref, concept_a, concept_b)
         );
         CREATE TABLE IF NOT EXISTS combo_meta (key TEXT PRIMARY KEY, value REAL);
+        CREATE TABLE IF NOT EXISTS combo_groups (
+            target_ref TEXT PRIMARY KEY, concepts TEXT, n_min INTEGER, joint INTEGER, loose INTEGER,
+            checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
         CREATE TABLE IF NOT EXISTS combo_titles (
             concept_a TEXT, concept_b TEXT, title TEXT, year INTEGER, work_id TEXT,
             PRIMARY KEY (concept_a, concept_b, work_id)
@@ -395,6 +419,45 @@ def _save_pairs(conn, ref: str, pairs: list[dict], method: str):
     """, [(ref, p["a"], p["b"], p["n_a"], p["n_b"], p["joint"], p["expected"], p["lift"],
            p.get("adjacency"), p.get("loose"), method) for p in pairs])
     conn.commit()
+
+
+GROUP_SEP = " | "
+
+
+def concepts_of(pairs: list[dict]) -> list[str]:
+    """Distinct concepts of a hypothesis, in first-seen order."""
+    out: list[str] = []
+    for p in pairs:
+        for c in (p["a"], p["b"]):
+            if c not in out:
+                out.append(c)
+    return out
+
+
+def measure_group(concepts: list[str], counts: dict[str, int], counter: "Counter") -> dict | None:
+    """Works matching ALL concepts (3 or more), strictly and, if rare, loosely. None for 2 concepts."""
+    if len(concepts) < 3:
+        return None
+    joint = counter.count(build_query(concepts))
+    loose = counter.try_count(build_loose_query(concepts)) if joint < STUDIED_MIN else None
+    return {"concepts": list(concepts), "n_min": min(counts.get(c, 0) for c in concepts),
+            "joint": joint, "loose": loose}
+
+
+def _save_group(conn, ref: str, group: dict):
+    conn.execute("INSERT OR REPLACE INTO combo_groups (target_ref, concepts, n_min, joint, loose) "
+                 "VALUES (?, ?, ?, ?, ?)",
+                 (ref, GROUP_SEP.join(group["concepts"]), group["n_min"], group["joint"],
+                  group.get("loose")))
+    conn.commit()
+
+
+def _load_group(conn, ref: str) -> dict | None:
+    row = conn.execute("SELECT concepts, n_min, joint, loose FROM combo_groups WHERE target_ref = ?",
+                       (ref,)).fetchone()
+    if not row:
+        return None
+    return {"concepts": row[0].split(GROUP_SEP), "n_min": row[1], "joint": row[2], "loose": row[3]}
 
 
 def _load_pairs(conn, ref: str) -> list[dict]:
@@ -428,6 +491,7 @@ def combo_summary(ref: str) -> dict | None:
     try:
         _ensure_table(conn)
         pairs = _load_pairs(conn, ref)
+        group = _load_group(conn, ref)
     finally:
         conn.close()
     if not pairs:
@@ -435,7 +499,7 @@ def combo_summary(ref: str) -> dict | None:
     counts = {}
     for p in pairs:
         counts[p["a"]], counts[p["b"]] = p["n_a"], p["n_b"]
-    return summarize(counts, pairs, get_adj_threshold())
+    return summarize(counts, pairs, get_adj_threshold(), group)
 
 
 def stored_refs() -> list[str]:
@@ -467,6 +531,13 @@ def _fmt_pair(p: dict) -> str:
     loose_s = f", loose={loose:,}" if loose is not None else ""
     return (f"{p['a']} × {p['b']}: n_A={p['n_a']:,}, n_B={p['n_b']:,}, "
             f"joint={p['joint']:,}{loose_s}{adj_s}")
+
+
+def _fmt_group(g: dict | None) -> str:
+    if not g:
+        return ""
+    loose = f", loose={g['loose']:,}" if g.get("loose") is not None else ""
+    return f"all of [{' + '.join(g['concepts'])}]: joint={g['joint']:,}{loose}"
 
 
 def measure_references(counter: Counter, verbose: bool = True) -> dict:
@@ -589,6 +660,33 @@ def rank_candidates(items: list[tuple[str, dict]]) -> list[tuple[str, dict]]:
                   key=lambda x: (not x[1]["robust"], -(x[1]["pair"].get("adjacency") or 0.0)))
 
 
+def fill_groups(counter: Counter, verbose: bool = True) -> int:
+    """Whole-combination count for every stored hypothesis with 3+ concepts that lacks one."""
+    conn = sqlite3.connect(DB_PATH)
+    _ensure_table(conn)
+    refs = [r[0] for r in conn.execute("SELECT DISTINCT target_ref FROM combo_checks")]
+    n = 0
+    for ref in refs:
+        if _load_group(conn, ref):
+            continue
+        pairs = _load_pairs(conn, ref)
+        concepts = concepts_of(pairs)
+        if len(concepts) < 3:
+            continue
+        counts = {}
+        for p in pairs:
+            counts[p["a"]], counts[p["b"]] = p["n_a"], p["n_b"]
+        group = measure_group(concepts, counts, counter)
+        if group is None:
+            continue
+        _save_group(conn, ref, group)
+        n += 1
+    conn.close()
+    if verbose and n:
+        print(f"  whole-combination count added for {n} hypotheses with 3+ concepts")
+    return n
+
+
 def rescore_all() -> int:
     """Rewrite each stored target's score from its stored pairs (verdict rules may have changed)."""
     n = 0
@@ -629,6 +727,8 @@ def print_report():
             star = " ★" if s["bridge_candidate"] else ""
             if s["pair"]:
                 print(f"  {ref:<11}{star} {_fmt_pair(s['pair'])}")
+                if s.get("group"):
+                    print(f"              {_fmt_group(s['group'])}  → decided by {s.get('decided_by')}")
             else:
                 print(f"  {ref:<11}")
     stars = rank_candidates([(ref, s) for lbl in groups for ref, s in groups[lbl]])
@@ -685,12 +785,15 @@ def check_combinations(refs: list[str] | None = None, model: str = DEFAULT_MODEL
                 print(f"  {t['ref']:<12} fewer than 2 concepts extracted — skipped")
             continue
         try:
-            _, pairs = measure(concepts, counter)
+            counts, pairs = measure(concepts, counter)
+            group = measure_group(concepts, counts, counter)
         except Exception as ex:
             if verbose:
                 print(f"  [WARN] {t['ref']}: {ex}")
             continue
         _save_pairs(conn, t["ref"], pairs, counter.mode)
+        if group:
+            _save_group(conn, t["ref"], group)
         n += 1
     conn.close()
 
@@ -701,6 +804,7 @@ def check_combinations(refs: list[str] | None = None, model: str = DEFAULT_MODEL
         print("Loose (reworded) counts and titles ...")
     fill_loose(counter, verbose)
     fill_titles(counter, verbose)
+    fill_groups(counter, verbose)
     rescore_all()
     if verbose:
         print_report()

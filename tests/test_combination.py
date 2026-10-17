@@ -323,3 +323,94 @@ def test_aggregate_excludes_novelty_from_loop_composite():
     a = aggregate(rows)[0]
     assert a["composite_excl_novelty"] == pytest.approx(3.0)
     assert a["composite"] == pytest.approx(11 / 3)
+
+
+# ------------------------------------------------------------------ #
+#  Whole combination (3+ concepts) and the phenomenon term            #
+# ------------------------------------------------------------------ #
+
+def G(joint, n_min=1000, loose=None, concepts=("A", "B", "C")):
+    return {"concepts": list(concepts), "n_min": n_min, "joint": joint, "loose": loose}
+
+
+def test_group_informative_rule():
+    assert not cb.is_group_informative(None)
+    assert cb.is_group_informative(G(3, n_min=10))               # any hit says something
+    assert cb.is_group_informative(G(0, n_min=cb.MIN_COMMON))    # zero among common concepts
+    assert not cb.is_group_informative(G(0, n_min=cb.MIN_COMMON - 1))
+
+
+def test_studied_whole_combination_overrides_an_unexplored_pair():
+    """The hyp:26 failure: every pair looks unexplored-ish but the three together are studied."""
+    pairs = [P("A", "B", joint=0), P("A", "C", joint=0), P("B", "C", joint=0)]
+    counts = {"A": 1000, "B": 1000, "C": 1000}
+    assert cb.summarize(counts, pairs)["label"] == "unexplored"
+    s = cb.summarize(counts, pairs, group=G(25))
+    assert s["label"] == "studied" and s["combo_novelty"] == 0.0 and s["decided_by"] == "whole"
+
+
+def test_whole_combination_with_few_hits_sets_novelty_and_robustness():
+    pairs = [P("A", "B", joint=50), P("A", "C", joint=40), P("B", "C", joint=30)]
+    counts = {"A": 1000, "B": 1000, "C": 1000}
+    assert cb.summarize(counts, pairs)["label"] == "studied"      # pairs alone: all studied
+    s = cb.summarize(counts, pairs, group=G(0, loose=2))
+    assert s["label"] == "unexplored" and s["robust"] and s["decided_by"] == "whole"
+    s = cb.summarize(counts, pairs, group=G(4, loose=30))
+    assert s["label"] == "few_papers" and s["combo_novelty"] == pytest.approx(0.6)
+    assert not s["robust"]
+
+
+def test_uninformative_group_falls_back_to_the_pairs():
+    pairs = [P("A", "B", joint=0), P("A", "C", joint=0), P("B", "C", joint=0)]
+    s = cb.summarize({"A": 1000, "B": 1000, "C": 1000}, pairs, group=G(0, n_min=100))
+    assert s["decided_by"] == "pair" and s["label"] == "unexplored"
+
+
+def test_measure_group_counts_all_concepts_together():
+    asked = []
+
+    class C(_FakeCounter):
+        def count(self, q): asked.append(q); return 3
+        def try_count(self, q): asked.append(q); return 7
+
+    assert cb.measure_group(["A", "B"], {"A": 1, "B": 2}, C()) is None     # pairs are not groups
+    g = cb.measure_group(["A", "B", "C"], {"A": 1000, "B": 2000, "C": 60}, C())
+    assert g == {"concepts": ["A", "B", "C"], "n_min": 60, "joint": 3, "loose": 7}
+    assert asked[0] == '"A" AND "B" AND "C"'
+
+
+def test_group_storage_and_backfill(tmp_path, monkeypatch):
+    db = tmp_path / "n.db"
+    monkeypatch.setattr(cb, "DB_PATH", db)
+    con = sqlite3.connect(db)
+    cb._ensure_table(con)
+    cb._save_pairs(con, "hyp:1", [P("A", "B"), P("A", "C"), P("B", "C")], "filter")
+    cb._save_pairs(con, "hyp:2", [P("A", "B")], "filter")                  # only 2 concepts
+    con.close()
+
+    class C(_FakeCounter):
+        def count(self, q): return 12
+        def try_count(self, q): return None
+
+    assert cb.fill_groups(C(), verbose=False) == 1
+    assert cb.fill_groups(C(), verbose=False) == 0                         # idempotent
+    con = sqlite3.connect(db)
+    assert cb._load_group(con, "hyp:1")["joint"] == 12
+    assert cb._load_group(con, "hyp:2") is None
+    con.close()
+    s = cb.combo_summary("hyp:1")
+    assert s["label"] == "studied" and s["decided_by"] == "whole"
+
+
+def test_decompose_prompt_asks_for_the_phenomenon(monkeypatch):
+    seen = {}
+
+    def fake(prompt, model=None):
+        seen["p"] = prompt
+        return {"concepts": ["suspense", "entropy"]}
+
+    from nous import llm
+    monkeypatch.setattr(llm, "generate_json", fake)
+    assert cb.decompose("Hypothesis H: suspense follows entropy reduction in film plots.") == \
+        ["suspense", "entropy"]
+    assert "PHENOMENON" in seen["p"]

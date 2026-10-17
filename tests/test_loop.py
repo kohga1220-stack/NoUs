@@ -191,3 +191,38 @@ def test_bridge_prompt_forbids_the_template_and_lists_the_works():
     from nous.engine.hypothesis import build_bridge_prompt
     p = build_bridge_prompt("A and B", [{"domain": "X", "title": "Paper one", "summary": "abstract"}])
     assert "Paper one" in p and "Do NOT write" in p and '"hypothesis"' in p
+
+
+def test_describe_ref_shows_concepts_whole_combination_and_closest_prior_work(tmp_path, monkeypatch):
+    import sqlite3
+    from nous.evaluation import combination as cb, literature, store
+    db = tmp_path / "n.db"
+    for mod in (loop, cb, literature, store):
+        monkeypatch.setattr(mod, "DB_PATH", db)
+    con = sqlite3.connect(db)
+    con.executescript("""
+        CREATE TABLE explorations (id INTEGER PRIMARY KEY, query TEXT);
+        CREATE TABLE hypotheses (id INTEGER PRIMARY KEY, exploration_id INTEGER, hypothesis_text TEXT);
+        INSERT INTO explorations VALUES (1, 'q');
+        INSERT INTO hypotheses VALUES (7, 1, 'Hypothesis H: suspense tracks entropy change');
+    """)
+    cb._ensure_table(con)
+    cb._save_pairs(con, "hyp:7", [
+        {"a": "suspense", "b": "entropy", "n_a": 900, "n_b": 5000, "joint": 3, "expected": 0.0,
+         "lift": 0.0, "adjacency": 0.4, "loose": 8},
+        {"a": "suspense", "b": "film", "n_a": 900, "n_b": 9000, "joint": 40, "expected": 0.0,
+         "lift": 0.0, "adjacency": 0.2, "loose": None}], "filter")
+    cb._save_group(con, "hyp:7", {"concepts": ["suspense", "entropy", "film"], "n_min": 900,
+                                  "joint": 2, "loose": 5})
+    literature._ensure_table(con)
+    con.execute("INSERT INTO literature_checks (target_ref, rank, work_id, title, year, cited_by, sim) "
+                "VALUES ('hyp:7', 1, 'W1', 'Entropy and suspense in film', 2019, 4, 0.83)")
+    con.execute("INSERT INTO combo_titles VALUES ('suspense', 'entropy', 'An older paper', 2005, 'W2')")
+    con.commit()
+    con.close()
+
+    text = loop.describe_ref("hyp:7")
+    assert "suspense tracks entropy change" in text
+    assert "suspense × entropy" in text and "An older paper" in text
+    assert "whole combination" in text and "joint=2" in text
+    assert "Entropy and suspense in film" in text and "sim=0.83" in text

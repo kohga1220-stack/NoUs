@@ -272,31 +272,47 @@ def default_steps(model: str = DEFAULT_MODEL, abstract: bool = False,
         from nous.memory.store import sync_hypotheses_to_chroma
         sync_hypotheses_to_chroma(only_ids={hid})
 
-    def describe(ref):
-        from nous.evaluation import store
-        from nous.evaluation.combination import _ensure_table as _ct, _load_pairs, load_titles
-        text = next((t["text"] for t in store.load_targets() if t["ref"] == ref), "")
-        conn = sqlite3.connect(DB_PATH)
-        try:
-            _ct(conn)
-            pairs = _load_pairs(conn, ref)
-        finally:
-            conn.close()
-        lines = [f"  hypothesis: {text[:400]}"]
-        for p in pairs:
-            adj = f"{p['adjacency']:.2f}" if p.get("adjacency") is not None else "n/a"
-            lines.append(f"  concepts: {p['a']} × {p['b']}  joint={p['joint']} loose={p['loose']} "
-                         f"adjacency={adj}")
-            for w in load_titles(p["a"], p["b"])[:3]:
-                lines.append(f"    - {w['title'][:90]} ({w['year']})")
-        return "\n".join(lines)
-
     def floor():
         from nous.evaluation import store
         from nous.evaluation.runner import aggregate
         return quality_floor([a["composite_excl_novelty"] for a in aggregate(store.load_scores())])
 
-    return Steps(collect, index, generate, judge, check, cutoff, sync, describe, floor)
+    return Steps(collect, index, generate, judge, check, cutoff, sync, describe_ref, floor)
+
+
+def describe_ref(ref: str, closest: int = 3) -> str:
+    """
+    Text shown after a cycle so that a human can judge the hypothesis: its claim, the concepts and
+    how often they are combined (pairs and, for 3+ concepts, the whole combination), and the
+    closest published works found by litcheck, with their similarity.
+    """
+    from nous.evaluation import store
+    from nous.evaluation.combination import (_ensure_table as _ct, _fmt_group, _load_group,
+                                             _load_pairs, load_titles)
+    from nous.evaluation.literature import closest_prior_work
+    text = next((t["text"] for t in store.load_targets() if t["ref"] == ref), "")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        _ct(conn)
+        pairs = _load_pairs(conn, ref)
+        group = _load_group(conn, ref)
+    finally:
+        conn.close()
+    lines = [f"  hypothesis: {text[:400]}"]
+    for p in pairs:
+        adj = f"{p['adjacency']:.2f}" if p.get("adjacency") is not None else "n/a"
+        lines.append(f"  concepts: {p['a']} × {p['b']}  joint={p['joint']} loose={p['loose']} "
+                     f"adjacency={adj}")
+        for w in load_titles(p["a"], p["b"])[:3]:
+            lines.append(f"    - {w['title'][:90]} ({w['year']})")
+    if group:
+        lines.append(f"  whole combination: {_fmt_group(group)}")
+    prior = closest_prior_work(ref, k=closest)
+    if prior:
+        lines.append("  closest published works (litcheck; sim 1.00 = identical text):")
+        for w in prior:
+            lines.append(f"    - {w['title'][:90]} ({w['year']}, sim={w['sim']:.2f})")
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------------------ #

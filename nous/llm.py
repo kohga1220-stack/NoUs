@@ -57,9 +57,70 @@ def extract_json(raw: str) -> dict:
     return json.loads(sanitize_json(raw[s:e]))
 
 
+# --- providers -----------------------------------------------------------
+# `model` selects the backend by an optional prefix; no prefix means local Ollama,
+# so every existing model name (e.g. "gemma4:e2b") keeps working unchanged.
+#   ollama:<name>    local Ollama (default)
+#   opencode:<id>    OpenCode Console, OpenAI-compatible API  (env OPENCODE_API_KEY)
+#   gemini:<name>    Gemini REST API                          (env GEMINI_API_KEY)
+OPENCODE_BASE_URL = "https://opencode.ai/inference/openai/v1"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+REQUEST_TIMEOUT = 300
+_PROVIDERS = ("ollama", "opencode", "gemini")
+
+
+def split_model(model: str) -> tuple[str, str]:
+    """Return (provider, model_name). An unknown prefix is part of an Ollama model name."""
+    head, sep, rest = model.partition(":")
+    if sep and head in _PROVIDERS and rest:
+        return head, rest
+    return "ollama", model
+
+
+def _api_key(env: str) -> str:
+    import os
+    key = os.environ.get(env)
+    if not key:
+        raise RuntimeError(f"環境変数 {env} が未設定です（Colab ならシークレットに登録し、os.environ に入れる）")
+    return key
+
+
+def _post_json(url: str, headers: dict, body: dict) -> dict:
+    import requests
+    resp = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
+    if resp.status_code >= 400:
+        # Report status and a short body only; never echo request headers (they hold the key).
+        raise RuntimeError(f"LLM API error {resp.status_code}: {resp.text[:300]}")
+    return resp.json()
+
+
+def _generate_opencode(prompt: str, name: str) -> str:
+    data = _post_json(
+        f"{OPENCODE_BASE_URL}/chat/completions",
+        {"Authorization": f"Bearer {_api_key('OPENCODE_API_KEY')}"},
+        {"model": name, "messages": [{"role": "user", "content": prompt}]},
+    )
+    return data["choices"][0]["message"]["content"] or ""
+
+
+def _generate_gemini(prompt: str, name: str) -> str:
+    data = _post_json(
+        f"{GEMINI_BASE_URL}/models/{name}:generateContent",
+        {"x-goog-api-key": _api_key("GEMINI_API_KEY")},
+        {"contents": [{"parts": [{"text": prompt}]}]},
+    )
+    parts = data["candidates"][0]["content"]["parts"]
+    return "".join(p.get("text", "") for p in parts)
+
+
 def generate(prompt: str, model: str = DEFAULT_MODEL) -> str:
+    provider, name = split_model(model)
+    if provider == "opencode":
+        return _generate_opencode(prompt, name)
+    if provider == "gemini":
+        return _generate_gemini(prompt, name)
     import ollama
-    return ollama.generate(model=model, prompt=prompt)["response"]
+    return ollama.generate(model=name, prompt=prompt)["response"]
 
 
 def generate_json(prompt: str, model: str = DEFAULT_MODEL, retries: int = 2) -> dict:

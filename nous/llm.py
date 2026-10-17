@@ -116,7 +116,10 @@ def _post_json(url: str, headers: dict, body: dict) -> dict:
         break
     if status >= 400:
         # ステータスと本文の先頭だけを出す。リクエストヘッダ（キー）は出さない。
-        raise RuntimeError(f"LLM API error {status}: {str(data)[:300]}")
+        msg = f"LLM API error {status}: {str(data)[:300]}"
+        if status == 403 and "FreeTierError" in str(data):
+            msg += "（OpenCode の -free モデルは OpenCode アプリ内でのみ使える。API では -free なしの有料モデルを使う）"
+        raise RuntimeError(msg)
     return data
 
 

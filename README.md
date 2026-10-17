@@ -52,7 +52,8 @@ python nous.py reliability         # 審査員どうし・人間との一致度�
 ```
 
 - 外部 API に送るのは、プロンプトに含まれる記事・仮説の本文。無料モデルには入力が学習に使われるものがあるため、OpenCode の無料枠のデータの扱いを確認してから使う。
-- Colab では、シークレットの値を `os.environ["OPENCODE_API_KEY"] = userdata.get("OPENCODE_API_KEY")` のように環境変数へ入れる。
+- Colab では、「ワンセット準備」セルが、シークレットの `OPENCODE_API_KEY` と `GEMINI_API_KEY` を環境変数へ読み込む（未登録なら「未設定」と表示）。`MODELS` に `opencode:...` や `gemini:...` を書いても、`ollama pull` はされない。
+- 429（レート制限）・5xx・接続エラーは、5・10・20・40 秒の間隔で最大4回再試行する。
 
 ### 仮説の評価
 

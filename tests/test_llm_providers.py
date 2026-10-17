@@ -64,3 +64,63 @@ def test_generate_json_works_through_provider(monkeypatch):
     monkeypatch.setenv("OPENCODE_API_KEY", "k")
     monkeypatch.setattr(llm, "_post_json", lambda u, h, b: {"choices": [{"message": {"content": 'x {"a": 1} y'}}]})
     assert llm.generate_json("p", model="opencode:m") == {"a": 1}
+
+
+# --- retry -------------------------------------------------------------
+
+def _scripted(monkeypatch, replies):
+    it = iter(replies)
+    calls = []
+    monkeypatch.setattr(llm, "_post_once", lambda url, headers, body: calls.append(1) or next(it))
+    monkeypatch.setattr("time.sleep", lambda *_: None)
+    return calls
+
+
+def test_retries_429_and_5xx_then_succeeds(monkeypatch):
+    calls = _scripted(monkeypatch, [(429, "slow"), (503, "down"), (200, {"ok": 1})])
+    assert llm._post_json("u", {}, {}) == {"ok": 1}
+    assert len(calls) == 3
+
+
+def test_retries_network_error(monkeypatch):
+    calls = _scripted(monkeypatch, [(llm.NETWORK_ERROR, "ConnectTimeout"), (200, {"ok": 2})])
+    assert llm._post_json("u", {}, {}) == {"ok": 2}
+    assert len(calls) == 2
+
+
+def test_gives_up_after_max_retries(monkeypatch):
+    calls = _scripted(monkeypatch, [(429, "slow")] * (llm.MAX_RETRIES + 1))
+    with pytest.raises(RuntimeError, match="429"):
+        llm._post_json("u", {}, {})
+    assert len(calls) == llm.MAX_RETRIES + 1
+
+
+def test_client_errors_are_not_retried(monkeypatch):
+    calls = _scripted(monkeypatch, [(401, "bad key"), (200, {"ok": 3})])
+    with pytest.raises(RuntimeError, match="401"):
+        llm._post_json("u", {}, {})
+    assert len(calls) == 1
+
+
+def test_network_error_message_has_no_url(monkeypatch):
+    import requests
+
+    def boom(*a, **k):
+        raise requests.exceptions.ConnectionError("https://opencode.ai/secret-path?key=SECRET")
+
+    monkeypatch.setattr(requests, "post", boom)
+    status, data = llm._post_once("https://opencode.ai/x", {"Authorization": "Bearer SECRET"}, {})
+    assert status == llm.NETWORK_ERROR and "SECRET" not in str(data)
+
+
+# --- Colab 準備セル -----------------------------------------------------
+
+def test_colab_prep_cell_compiles_and_handles_api_models():
+    import json
+    from pathlib import Path
+
+    nb = json.loads((Path(__file__).resolve().parents[1] / "notebooks" / "nous_colab.ipynb").read_text(encoding="utf-8"))
+    src = "".join(nb["cells"][2]["source"])
+    compile(src.replace("get_ipython().system", "print"), "cell2", "exec")
+    assert "OPENCODE_API_KEY" in src and "GEMINI_API_KEY" in src
+    assert "_ollama_name" in src

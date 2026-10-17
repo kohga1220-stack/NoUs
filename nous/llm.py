@@ -85,13 +85,39 @@ def _api_key(env: str) -> str:
     return key
 
 
-def _post_json(url: str, headers: dict, body: dict) -> dict:
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+MAX_RETRIES = 4
+NETWORK_ERROR = 599     # 接続・タイムアウトなど、HTTP 応答が得られなかったとき
+
+
+def _post_once(url: str, headers: dict, body: dict) -> tuple[int, dict | str]:
+    """1 回 POST して (HTTPステータス, JSON または本文) を返す。テストでは差し替える。"""
     import requests
-    resp = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
-    if resp.status_code >= 400:
-        # Report status and a short body only; never echo request headers (they hold the key).
-        raise RuntimeError(f"LLM API error {resp.status_code}: {resp.text[:300]}")
-    return resp.json()
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT)
+    except requests.exceptions.RequestException as e:
+        return NETWORK_ERROR, type(e).__name__          # 例外の文面にはURLが入るため、型名だけ残す
+    try:
+        return resp.status_code, resp.json()
+    except ValueError:
+        return resp.status_code, resp.text
+
+
+def _post_json(url: str, headers: dict, body: dict) -> dict:
+    """429 / 5xx / 接続エラーは指数バックオフ（5, 10, 20, 40 秒）で再試行する。"""
+    import time
+    delay = 5.0
+    for attempt in range(MAX_RETRIES + 1):
+        status, data = _post_once(url, headers, body)
+        if (status in RETRY_STATUSES or status == NETWORK_ERROR) and attempt < MAX_RETRIES:
+            time.sleep(delay)
+            delay *= 2
+            continue
+        break
+    if status >= 400:
+        # ステータスと本文の先頭だけを出す。リクエストヘッダ（キー）は出さない。
+        raise RuntimeError(f"LLM API error {status}: {str(data)[:300]}")
+    return data
 
 
 def _generate_opencode(prompt: str, name: str) -> str:

@@ -43,7 +43,7 @@ python nous.py abstract [limit]    # 各記事を「分野語を使わない構�
 | 指定 | 呼び出し先 | 必要な環境変数 |
 |---|---|---|
 | `gemma4:e2b`（接頭辞なし）/ `ollama:gemma4:e2b` | ローカル Ollama | なし |
-| `opencode:<有料ID>` | OpenCode Console（OpenAI 互換 API）。**現在は使わない方針**（`-free` は API で使えず、有料IDの動作は未確認） | `OPENCODE_API_KEY` |
+| `opencode:<ID>` | OpenCode Console。**使わない方針**（下の注意を参照） | `OPENCODE_API_KEY` |
 | `gemini:gemini-3.6-flash` | Gemini API | `GEMINI_API_KEY` |
 
 ```bash
@@ -51,8 +51,8 @@ python nous.py evaluate --judges gemma4:e2b,gemini:gemini-3.6-flash
 python nous.py reliability         # 審査員どうし・人間との一致度で比べる
 ```
 
-- **OpenCode の `-free` モデルは、API からは使えない**（実キーで 403 `FreeTierError`「free tier can only be used from within OpenCode」を確認。2026-10-17）。API で使うなら `-free` なしの有料モデル（クレジットの追加が必要。課金の前に、自動チャージのオフと月の利用上限を設定する）。Gemini は実キーで動作を確認済み。
-- 外部 API に送るのは、プロンプトに含まれる記事・仮説の本文。無料モデルには入力が学習に使われるものがあるため、OpenCode の無料枠のデータの扱いを確認してから使う。
+- **OpenCode は使わない方針**。`-free` のモデルは API から使えない（実キーで 403 `FreeTierError` を確認、2026-10-17）。`-free` なしの有料 ID の動作は未確認。Gemini は実キーで動作を確認済み。
+- 外部 API に送るのは、プロンプトに含まれる記事・仮説の本文（公開情報）だけ。無料枠のモデルには、入力が学習に使われるものがあるため、使う前に、そのサービスのデータの扱いを確認する。
 - Colab では、「ワンセット準備」セルが、シークレットの `OPENCODE_API_KEY` と `GEMINI_API_KEY` を環境変数へ読み込む（未登録なら「未設定」と表示）。`MODELS` に `opencode:...` や `gemini:...` を書いても、`ollama pull` はされない。
 - 429（レート制限）・5xx・接続エラーは、5・10・20・40 秒の間隔で最大4回再試行する。
 - Gemini の応答に候補や本文がない場合（プロンプトのブロックなど）は、理由（`blockReason` / `finishReason`）を含む `EmptyResponseError` にして、再試行しない。

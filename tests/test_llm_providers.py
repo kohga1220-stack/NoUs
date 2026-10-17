@@ -151,3 +151,11 @@ def test_colab_prep_cell_compiles_and_handles_api_models():
     compile(src.replace("get_ipython().system", "print"), "cell2", "exec")
     assert "OPENCODE_API_KEY" in src and "GEMINI_API_KEY" in src
     assert "_ollama_name" in src
+
+
+def test_free_tier_403_gets_a_hint_and_no_retry(monkeypatch):
+    body = {"type": "error", "error": {"type": "FreeTierError", "message": "free tier can only be used from within OpenCode"}}
+    calls = _scripted(monkeypatch, [(403, body), (200, {"ok": 1})])
+    with pytest.raises(RuntimeError, match="403") as ei:
+        llm._post_json("u", {}, {})
+    assert "有料モデル" in str(ei.value) and len(calls) == 1

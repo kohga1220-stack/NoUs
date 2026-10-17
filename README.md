@@ -36,6 +36,24 @@ python nous.py abstract [limit]    # 各記事を「分野語を使わない構�
 一度作ると `query` / `hyp` / `debate` / `graph` が自動で構造類似度を併用する
 （`nous_score = 0.4 × 意味類似 + 0.6 × 構造類似`、構造類似 = 0.5 × 構造記述の埋め込み類似 + 0.5 × モチーフJaccard）。
 
+### モデルの指定（Ollama 以外も使う）
+
+`--gen-model` や `--judges` などのモデル名に、接頭辞を付けると呼び出し先を選べる。接頭辞なしは従来どおりローカル Ollama。
+
+| 指定 | 呼び出し先 | 必要な環境変数 |
+|---|---|---|
+| `gemma4:e2b`（接頭辞なし）/ `ollama:gemma4:e2b` | ローカル Ollama | なし |
+| `opencode:deepseek-v4.1-flash-free` | OpenCode Console（OpenAI 互換 API） | `OPENCODE_API_KEY` |
+| `gemini:gemini-3.6-flash` | Gemini API | `GEMINI_API_KEY` |
+
+```bash
+python nous.py evaluate --judges gemma4:e2b,opencode:glm-5.3-flash-free,gemini:gemini-3.6-flash
+python nous.py reliability         # 審査員どうし・人間との一致度で比べる
+```
+
+- 外部 API に送るのは、プロンプトに含まれる記事・仮説の本文。無料モデルには入力が学習に使われるものがあるため、OpenCode の無料枠のデータの扱いを確認してから使う。
+- Colab では、シークレットの値を `os.environ["OPENCODE_API_KEY"] = userdata.get("OPENCODE_API_KEY")` のように環境変数へ入れる。
+
 ### 仮説の評価
 
 ```bash

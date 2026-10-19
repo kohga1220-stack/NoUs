@@ -155,25 +155,31 @@ def _generate_gemini(prompt: str, name: str) -> str:
     return text
 
 
-def generate(prompt: str, model: str = DEFAULT_MODEL) -> str:
+def generate(prompt: str, model: str = DEFAULT_MODEL, num_ctx: int | None = None) -> str:
+    """`num_ctx` (Ollama only): context length in tokens. Ollama's default is short and a longer
+    prompt is cut from the START without any error, so long prompts must ask for what they need."""
     provider, name = split_model(model)
     if provider == "opencode":
         return _generate_opencode(prompt, name)
     if provider == "gemini":
         return _generate_gemini(prompt, name)
     import ollama
+    if num_ctx:
+        return ollama.generate(model=name, prompt=prompt, options={"num_ctx": num_ctx})["response"]
     return ollama.generate(model=name, prompt=prompt)["response"]
 
 
-def generate_json(prompt: str, model: str = DEFAULT_MODEL, retries: int = 2) -> dict:
+def generate_json(prompt: str, model: str = DEFAULT_MODEL, retries: int = 2,
+                  num_ctx: int | None = None) -> dict:
     """
     Generate and parse a JSON object. Small models occasionally emit malformed JSON,
     so the call is retried up to `retries` more times before the error is raised.
     """
     last_error: Exception | None = None
+    extra = {"num_ctx": num_ctx} if num_ctx else {}
     for _ in range(retries + 1):
         try:
-            return extract_json(generate(prompt, model=model))
+            return extract_json(generate(prompt, model=model, **extra))
         except ValueError as ex:        # json.JSONDecodeError is a ValueError
             last_error = ex
     raise last_error

@@ -28,6 +28,7 @@ Nothing here claims a discovery: accepted means "not found in the literature by 
 """
 from __future__ import annotations
 import sqlite3
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -337,6 +338,20 @@ def describe_ref(ref: str, closest: int = 3) -> str:
 #  Cycle and driver                                                   #
 # ------------------------------------------------------------------ #
 
+def _timed(times: dict, name: str, fn, *args):
+    """Call fn(*args) and add the seconds it took to times[name]."""
+    t0 = time.monotonic()
+    try:
+        return fn(*args)
+    finally:
+        times[name] = times.get(name, 0.0) + time.monotonic() - t0
+
+
+def format_times(times: dict) -> str:
+    total = sum(times.values())
+    return "time " + ", ".join(f"{k} {v:.0f}s" for k, v in times.items()) + f" (total {total:.0f}s)"
+
+
 def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
               min_shared: int = MIN_SHARED) -> dict | None:
     from nous.collector.openalex import load_field_links
@@ -345,6 +360,7 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
         if verbose:
             print("No untried field pair left (or no field links yet: run 'nous.py voids --refresh').")
         return None
+    times: dict = {}
     rec = {"field_a": link["field_a"], "field_b": link["field_b"],
            "name_a": link["name_a"], "name_b": link["name_b"]}
     if verbose:
@@ -352,23 +368,23 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
         print(f"\n--- pair: {link['name_a']} × {link['name_b']} (lift={link['lift']:.3f}, "
               f"shared works={link['observed']:,}, neighbour={c.get('neighbour', 0):.2f})")
     try:
-        works = steps.collect(link, per_pair)
+        works = _timed(times, "collect", steps.collect, link, per_pair)
         rec["query"] = make_query(link, works)
         if verbose:
             print(f"  collected {len(works)} bridge works; query: {rec['query'][:100]}")
-        steps.index()
-        result = steps.generate(rec["query"], works)
+        _timed(times, "index", steps.index)
+        result = _timed(times, "generate", steps.generate, rec["query"], works)
         hid = result.get("id")
         if hid is None:
             raise RuntimeError("hypothesis was not saved")
         rec["hyp_ref"] = f"hyp:{hid}"
-        rec["composite"] = steps.judge(rec["hyp_ref"])
-        rec["combo_label"], rec["lit_novelty"] = steps.check(rec["hyp_ref"])
+        rec["composite"] = _timed(times, "judge", steps.judge, rec["hyp_ref"])
+        rec["combo_label"], rec["lit_novelty"] = _timed(times, "check", steps.check, rec["hyp_ref"])
         floor = steps.floor() if steps.floor else None
         accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff(),
                                   rec["composite"], floor)
         if accepted and steps.known:
-            accepted, reason = apply_known(steps.known(rec["hyp_ref"]), reason)
+            accepted, reason = apply_known(_timed(times, "known", steps.known, rec["hyp_ref"]), reason)
         rec["status"], rec["reason"] = ("accepted" if accepted else "rejected"), reason
         rec["reward"] = reward_for(accepted, rec["composite"])
         if accepted:
@@ -380,6 +396,7 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
         comp = f"{rec['composite']:.2f}" if rec.get("composite") is not None else "n/a"
         print(f"  → {rec['status'].upper()}  {rec.get('hyp_ref', '')}  composite(excl. novelty)={comp}  "
               f"combination={rec.get('combo_label')}  reason: {rec['reason']}")
+        print(f"  {format_times(times)}")
         if rec.get("hyp_ref") and steps.describe:
             try:
                 print(steps.describe(rec["hyp_ref"]))

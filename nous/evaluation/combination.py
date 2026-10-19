@@ -369,7 +369,50 @@ HYPOTHESIS CLAIM:
 {claim_text(text)[:1500]}
 
 Respond ONLY with JSON: {{"concepts": ["...", "..."]}}"""
-    return parse_concepts(generate_json(prompt, model=model))
+    concepts = parse_concepts(generate_json(prompt, model=model))
+    return ensure_phenomenon(text, concepts, model)
+
+
+def _stems(phrase: str) -> set[str]:
+    """Crude word stems (first 5 letters of words with >= 4 letters) for overlap checks."""
+    return {w[:5] for w in re.findall(r"[a-z]{4,}", phrase.lower())}
+
+
+def has_phenomenon(concepts: list[str], phenomenon: str) -> bool:
+    want = _stems(phenomenon)
+    return not want or any(want & _stems(c) for c in concepts)
+
+
+def merge_phenomenon(concepts: list[str], phenomenon: str) -> list[str]:
+    """Add `phenomenon` unless a concept already covers it; at 4 concepts it replaces the last
+    one (the first ones are the ones the model ranked as core). Pure."""
+    phenomenon = sanitize_phrase(phenomenon)
+    if not phenomenon or len(phenomenon.split()) > 6 or has_phenomenon(concepts, phenomenon):
+        return concepts
+    return (concepts[:3] if len(concepts) >= 4 else concepts) + [phenomenon]
+
+
+def ensure_phenomenon(text: str, concepts: list[str], model: str) -> list[str]:
+    """Small models often list the tools/theories and skip the thing the claim predicts, which
+    makes every pair look like a well-studied generic combination. Ask one narrow question for
+    that phenomenon and add it if no concept covers it. Never makes the result worse: a failed
+    or empty answer leaves `concepts` as they are."""
+    from nous.llm import generate_json
+    prompt = f"""In this research hypothesis, what is the outcome or quantity the claim says
+is affected, changed or predicted? Answer with ONE standard academic term of 1-4 words, as it
+would appear in a paper title (for example "acceptability threshold", "opinion polarization",
+"tendon stiffness"). Not a method, not a theory.
+
+HYPOTHESIS CLAIM:
+{claim_text(text)[:1500]}
+
+Respond ONLY with JSON: {{"phenomenon": "..."}}"""
+    try:
+        data = generate_json(prompt, model=model)
+    except Exception:
+        return concepts
+    ph = data.get("phenomenon") if isinstance(data, dict) else None
+    return merge_phenomenon(concepts, ph) if isinstance(ph, str) else concepts
 
 
 # ------------------------------------------------------------------ #

@@ -392,11 +392,53 @@ def test_decompose_prompt_asks_for_the_phenomenon(monkeypatch):
     seen = {}
 
     def fake(prompt, model=None):
-        seen["p"] = prompt
-        return {"concepts": ["suspense", "entropy"]}
+        seen.setdefault("p", prompt)
+        return {"concepts": ["suspense", "entropy"]} if "concepts" in prompt.split("Respond")[-1] \
+            else {"phenomenon": "suspense"}
 
     from nous import llm
     monkeypatch.setattr(llm, "generate_json", fake)
     assert cb.decompose("Hypothesis H: suspense follows entropy reduction in film plots.") == \
         ["suspense", "entropy"]
     assert "PHENOMENON" in seen["p"]
+
+
+def test_merge_phenomenon_adds_missing_term_and_keeps_covered_ones():
+    assert cb.merge_phenomenon(["dental anxiety", "aesthetic perception"], "colour difference threshold") == \
+        ["dental anxiety", "aesthetic perception", "colour difference threshold"]
+    # already covered by a concept (shared word stem) -> unchanged
+    assert cb.merge_phenomenon(["tooth colour difference", "anxiety"], "colour difference threshold") == \
+        ["tooth colour difference", "anxiety"]
+    # at four concepts the phenomenon replaces the last one
+    four = ["a theory", "b method", "c field", "d tool"]
+    assert cb.merge_phenomenon(four, "opinion polarization") == four[:3] + ["opinion polarization"]
+    # junk answers change nothing
+    assert cb.merge_phenomenon(["x term"], "") == ["x term"]
+    assert cb.merge_phenomenon(["x term"], "one two three four five six seven") == ["x term"]
+
+
+def test_decompose_adds_phenomenon_from_second_question(monkeypatch):
+    from nous import llm
+
+    def fake(prompt, model=None):
+        if "Respond ONLY with JSON: {\"phenomenon\"" in prompt:
+            return {"phenomenon": "acceptability threshold"}
+        return {"concepts": ["dental anxiety", "aesthetic perception"]}
+
+    monkeypatch.setattr(llm, "generate_json", fake)
+    assert cb.decompose("Hypothesis H: anxious patients accept smaller colour differences.") == \
+        ["dental anxiety", "aesthetic perception", "acceptability threshold"]
+
+
+def test_decompose_survives_a_failing_second_question(monkeypatch):
+    from nous import llm
+    calls = []
+
+    def fake(prompt, model=None):
+        calls.append(1)
+        if len(calls) > 1:
+            raise RuntimeError("model busy")
+        return {"concepts": ["a term", "b term"]}
+
+    monkeypatch.setattr(llm, "generate_json", fake)
+    assert cb.decompose("Hypothesis H: something happens to something else here.") == ["a term", "b term"]

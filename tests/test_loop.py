@@ -259,3 +259,12 @@ def test_retract_marks_the_run_hides_the_hypothesis_and_removes_it_from_the_know
     assert not loop.retract("hyp:999", kb_delete=gone.append) and gone == ["hyp:27"]
     with pytest.raises(ValueError):
         loop.retract("scepter:3", kb_delete=gone.append)
+
+
+def test_format_times_lists_each_step_and_total():
+    from nous import loop
+    t = {}
+    assert loop._timed(t, "a", lambda x: x + 1, 1) == 2
+    t["b"] = 2.0
+    out = loop.format_times(t)
+    assert out.startswith("time a ") and "b 2s" in out and "total" in out

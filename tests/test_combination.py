@@ -333,37 +333,23 @@ def G(joint, n_min=1000, loose=None, concepts=("A", "B", "C")):
     return {"concepts": list(concepts), "n_min": n_min, "joint": joint, "loose": loose}
 
 
-def test_group_informative_rule():
-    assert not cb.is_group_informative(None)
-    assert cb.is_group_informative(G(3, n_min=10))               # any hit says something
-    assert cb.is_group_informative(G(0, n_min=cb.MIN_COMMON))    # zero among common concepts
-    assert not cb.is_group_informative(G(0, n_min=cb.MIN_COMMON - 1))
-
-
-def test_studied_whole_combination_overrides_an_unexplored_pair():
-    """The hyp:26 failure: every pair looks unexplored-ish but the three together are studied."""
-    pairs = [P("A", "B", joint=0), P("A", "C", joint=0), P("B", "C", joint=0)]
+def test_whole_combination_never_changes_the_verdict():
+    """A conjunction cannot match more works than its pairs, so it must not make a verdict lenient."""
     counts = {"A": 1000, "B": 1000, "C": 1000}
-    assert cb.summarize(counts, pairs)["label"] == "unexplored"
-    s = cb.summarize(counts, pairs, group=G(25))
-    assert s["label"] == "studied" and s["combo_novelty"] == 0.0 and s["decided_by"] == "whole"
+    studied = [P("A", "B", joint=50), P("A", "C", joint=40), P("B", "C", joint=30)]
+    for g in (None, G(0), G(4, loose=30), G(25)):
+        s = cb.summarize(counts, studied, group=g)
+        assert s["label"] == "studied" and s["combo_novelty"] == 0.0 and s["group"] == g
+    rare = [P("A", "B", joint=0), P("A", "C", joint=0), P("B", "C", joint=0)]
+    assert cb.summarize(counts, rare, group=G(25))["label"] == "unexplored"   # still the pair verdict
 
 
-def test_whole_combination_with_few_hits_sets_novelty_and_robustness():
-    pairs = [P("A", "B", joint=50), P("A", "C", joint=40), P("B", "C", joint=30)]
+def test_the_most_novel_pair_decides_even_when_the_whole_combination_is_zero():
     counts = {"A": 1000, "B": 1000, "C": 1000}
-    assert cb.summarize(counts, pairs)["label"] == "studied"      # pairs alone: all studied
-    s = cb.summarize(counts, pairs, group=G(0, loose=2))
-    assert s["label"] == "unexplored" and s["robust"] and s["decided_by"] == "whole"
-    s = cb.summarize(counts, pairs, group=G(4, loose=30))
-    assert s["label"] == "few_papers" and s["combo_novelty"] == pytest.approx(0.6)
-    assert not s["robust"]
-
-
-def test_uninformative_group_falls_back_to_the_pairs():
-    pairs = [P("A", "B", joint=0), P("A", "C", joint=0), P("B", "C", joint=0)]
-    s = cb.summarize({"A": 1000, "B": 1000, "C": 1000}, pairs, group=G(0, n_min=100))
-    assert s["decided_by"] == "pair" and s["label"] == "unexplored"
+    pairs = [P("A", "B", joint=219), P("A", "C", joint=12), P("B", "C", joint=40)]
+    s = cb.summarize(counts, pairs, group=G(0, loose=3))
+    assert s["label"] == "studied" and s["pair"]["joint"] == 12      # the old regression: this became novel
+    assert s["robust"] is False and "decided_by" not in s
 
 
 def test_measure_group_counts_all_concepts_together():
@@ -399,7 +385,7 @@ def test_group_storage_and_backfill(tmp_path, monkeypatch):
     assert cb._load_group(con, "hyp:2") is None
     con.close()
     s = cb.combo_summary("hyp:1")
-    assert s["label"] == "studied" and s["decided_by"] == "whole"
+    assert s["label"] == "unexplored" and s["group"]["joint"] == 12      # pairs (all joint=0) decide; group is shown
 
 
 def test_decompose_prompt_asks_for_the_phenomenon(monkeypatch):

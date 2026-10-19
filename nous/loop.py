@@ -306,7 +306,7 @@ def describe_ref(ref: str, closest: int = 3) -> str:
         for w in load_titles(p["a"], p["b"])[:3]:
             lines.append(f"    - {w['title'][:90]} ({w['year']})")
     if group:
-        lines.append(f"  whole combination: {_fmt_group(group)}")
+        lines.append(f"  whole combination (reference only, not used for the verdict): {_fmt_group(group)}")
     prior = closest_prior_work(ref, k=closest)
     if prior:
         lines.append("  closest published works (litcheck; sim 1.00 = identical text):")

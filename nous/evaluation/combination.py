@@ -29,12 +29,12 @@ A Nous hypothesis combines established ideas from different fields. It is decomp
    survives rewording (`robust`); otherwise the phrase count was just too narrow. For pairs
    with 1-9 joint works the most-cited titles are stored so a human can read who combined them.
 
-4. WHOLE COMBINATION  (3 or more concepts)
-   The hypothesis claims all of its concepts *together*. Checking pairs alone can call a
-   hypothesis novel because one pair is rare while the other pairs are well studied (or the
-   reverse). For 3+ concepts the works matching ALL of them (`A AND B AND C`) are counted too
-   (strict phrases, and loosely if fewer than STUDIED_MIN). When that count is informative it
-   decides the verdict; the pairs stay as supporting detail.
+4. WHOLE COMBINATION  (3 or more concepts; reference only)
+   For 3+ concepts the works matching ALL of them (`A AND B AND C`) are counted too and shown
+   next to the pairs. They do NOT decide the verdict: a conjunction can never match more works
+   than any of its pairs, so the whole-combination count can only make a hypothesis look
+   MORE novel, never less (with 4 specific phrases it is almost always 0). The verdict comes
+   from the most novel informative pair, as before.
 
 Reference pairs (famous combinations and deliberately unrelated ones) are measured every
 time so the numbers can be read against a scale.
@@ -145,11 +145,6 @@ def adjacency_threshold(known: list[float], unrelated: list[float]) -> float | N
     return (min(known) + max(unrelated)) / 2
 
 
-def is_group_informative(group: dict | None) -> bool:
-    """A whole-combination count says something unless it is zero AND a concept is too narrow."""
-    return bool(group) and (group["joint"] > 0 or group.get("n_min", 0) >= MIN_COMMON)
-
-
 def summarize(concept_counts: dict[str, int], pairs: list[dict],
               adj_threshold: float | None = None, group: dict | None = None) -> dict:
     """
@@ -161,8 +156,8 @@ def summarize(concept_counts: dict[str, int], pairs: list[dict],
       few_papers          joint is 1..9
       studied             joint >= 10
 
-    `joint` is that of the WHOLE combination (`group`, 3+ concepts) when it is informative,
-    otherwise that of the most novel informative pair.
+    `joint` is that of the most novel informative pair. `group` (the whole combination of 3+
+    concepts) is carried along for display only; it is never used for the verdict (see 4. above).
     combo_novelty: 1.0 unexplored, 1 - joint/10 for few_papers, 0.0 studied, None otherwise.
     bridge_candidate: unexplored / few_papers AND the literatures are neighbours
     (adjacency of the rarest pair >= adj_threshold).
@@ -172,24 +167,21 @@ def summarize(concept_counts: dict[str, int], pairs: list[dict],
         return {"label": "unrecognized_terms", "combo_novelty": None, "pair": None,
                 "bridge_candidate": False, "robust": False, "group": group}
     informative = [p for p in pairs if is_informative(p)]
-    use_group = is_group_informative(group)
-    if not informative and not use_group:
+    if not informative:
         return {"label": "inconclusive", "combo_novelty": None, "pair": None,
                 "bridge_candidate": False, "robust": False, "group": group}
-    best = (min(informative, key=lambda p: (p["joint"], -(p.get("adjacency") or 0.0)))
-            if informative else max(pairs, key=lambda p: p.get("adjacency") or 0.0))
-    decider = group if use_group else best
-    status = pair_status(decider)
+    best = min(informative, key=lambda p: (p["joint"], -(p.get("adjacency") or 0.0)))
+    status = pair_status(best)
     label = {"none": "unexplored", "few_papers": "few_papers", "studied": "studied"}[status]
-    novelty = {"unexplored": 1.0, "few_papers": round(1.0 - decider["joint"] / STUDIED_MIN, 4),
+    novelty = {"unexplored": 1.0, "few_papers": round(1.0 - best["joint"] / STUDIED_MIN, 4),
                "studied": 0.0}[label]
     adj = best.get("adjacency")
     bridge = (label in ("unexplored", "few_papers") and adj is not None
               and adj_threshold is not None and adj >= adj_threshold)
-    loose = decider.get("loose")
+    loose = best.get("loose")
     robust = label != "studied" and loose is not None and loose < STUDIED_MIN
     return {"label": label, "combo_novelty": novelty, "pair": best, "bridge_candidate": bridge,
-            "robust": robust, "group": group, "decided_by": "whole" if use_group else "pair"}
+            "robust": robust, "group": group}
 
 
 _CLAIM_MARKERS = re.compile(r"hypothesis\s*(?:h)?\s*[:：]", re.IGNORECASE)
@@ -728,7 +720,7 @@ def print_report():
             if s["pair"]:
                 print(f"  {ref:<11}{star} {_fmt_pair(s['pair'])}")
                 if s.get("group"):
-                    print(f"              {_fmt_group(s['group'])}  → decided by {s.get('decided_by')}")
+                    print(f"              {_fmt_group(s['group'])}  (reference only)")
             else:
                 print(f"  {ref:<11}")
     stars = rank_candidates([(ref, s) for lbl in groups for ref, s in groups[lbl]])

@@ -260,3 +260,30 @@ def test_cli_negatives_counts_false_positives(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "wrongly flagged as established: 1/6" in out and len(kc.NEGATIVE_CONTROLS) == 6
     assert all(len(t) > 60 for _, t in kc.NEGATIVE_CONTROLS)
+
+
+def _fake_ollama(monkeypatch, names=None, as_dict=False, boom=False):
+    import sys, types
+
+    def lst():
+        if boom:
+            raise RuntimeError("ollama is not running")
+        ms = [{"model": n} if as_dict else types.SimpleNamespace(model=n) for n in (names or [])]
+        return {"models": ms} if as_dict else types.SimpleNamespace(models=ms)
+
+    monkeypatch.setitem(sys.modules, "ollama", types.SimpleNamespace(list=lst))
+
+
+def test_default_known_model_prefers_the_local_model_then_gemini_then_off(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    for as_dict in (False, True):                      # both shapes of the ollama client's answer
+        _fake_ollama(monkeypatch, ["gemma4:e2b", "gemma4:12b"], as_dict=as_dict)
+        assert kc.default_known_model() == "gemma4:12b"
+    _fake_ollama(monkeypatch, ["gemma4:e2b"])
+    assert kc.default_known_model() is None                              # only the weak model: off, not e2b
+    monkeypatch.setenv("GEMINI_API_KEY", "k" * 12)
+    assert kc.default_known_model() == kc.DEFAULT_KNOWN_MODEL            # Gemini when 12b is not pulled
+    _fake_ollama(monkeypatch, boom=True)
+    assert kc.default_known_model() == kc.DEFAULT_KNOWN_MODEL            # Ollama not running
+    _fake_ollama(monkeypatch, ["gemma4:12b"])
+    assert kc.default_known_model() == "gemma4:12b"                      # the local model wins over Gemini

@@ -40,7 +40,7 @@ Usage:
     python nous.py autoloop 1 --gen-model M   # write the hypothesis with a different (e.g. larger) Ollama model
     python nous.py autoloop --plan     # which field pairs would be explored next (no API calls); --min-shared N
     python nous.py autoloop --report   # log of past loop runs
-    python nous.py autoloop 1 --known-model M   # known-work check (default: Gemini if GEMINI_API_KEY is set; "none" = off)
+    python nous.py autoloop 1 --known-model M   # known-work check (default: local gemma4:12b if pulled, else Gemini if GEMINI_API_KEY is set; "none" = off)
     python nous.py knowncheck [--controls | --accepted [--retract] | hyp:26 ...]   # does a close paper already STATE the claim?
     python nous.py autoloop --retract hyp:27 [reason]   # take back an accepted hypothesis that is known work (leaves the knowledge base)
 
@@ -232,15 +232,16 @@ def cmd_autoloop(args: list[str]):
         i = args.index("--gen-model")
         gen_model = args[i + 1]
         args = args[:i] + args[i + 2:]
-    import os
-    from nous.evaluation.knowncheck import DEFAULT_KNOWN_MODEL
-    known_model = DEFAULT_KNOWN_MODEL if os.environ.get("GEMINI_API_KEY") else None
+    from nous.evaluation.knowncheck import default_known_model
+    known_model = default_known_model()
     if "--known-model" in args:
         i = args.index("--known-model")
         known_model = None if args[i + 1] == "none" else args[i + 1]
         args = args[:i] + args[i + 2:]
     if known_model is None:
-        print("(known-work check is off: set GEMINI_API_KEY or pass --known-model M)")
+        print("(known-work check is off: pull gemma4:12b, set GEMINI_API_KEY, or pass --known-model M)")
+    else:
+        print(f"(known-work check: {known_model})")
     rest = [a for a in args if not a.startswith("--")]
     loop.autoloop(cycles=int(rest[0]) if rest else 1, per_pair=per_pair,
                   abstract="--abstract" in args, min_shared=min_shared, gen_model=gen_model,

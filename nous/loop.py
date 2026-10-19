@@ -408,6 +408,37 @@ def print_plan(top: int = 10, min_shared: int = MIN_SHARED):
         hist = hist + [{"field_a": l["field_a"], "field_b": l["field_b"], "reward": 0.0}]
 
 
+def _kb_delete(ref: str):
+    """Remove an accepted hypothesis from the ChromaDB knowledge base (no error if it is not there)."""
+    from nous.engine.embedder import get_collection
+    get_collection().delete(ids=[f"hyp_{ref.split(':', 1)[1]}"])
+
+
+def retract(ref: str, reason: str = "retracted: known work", kb_delete=None) -> bool:
+    """
+    Take back an accepted hypothesis that turned out to be known work: its loop run becomes
+    'retracted' with reward 0, it leaves the knowledge base, and `nous.py sync` never adds it
+    again (hypotheses.validated = -1). The hypothesis text and its checks stay in the database.
+    """
+    if not ref.startswith("hyp:") or not ref[4:].isdigit():
+        raise ValueError(f"expected a reference like 'hyp:27', got {ref!r}")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        _ensure_table(conn)
+        runs = conn.execute("UPDATE loop_runs SET status = 'retracted', reward = 0, reason = ? "
+                            "WHERE hyp_ref = ?", (reason, ref)).rowcount
+        hyps = conn.execute("UPDATE hypotheses SET validated = -1 WHERE id = ?",
+                            (int(ref[4:]),)).rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    if not hyps:
+        return False
+    (kb_delete or _kb_delete)(ref)
+    print(f"retracted {ref}: {runs} loop run(s) marked, removed from the knowledge base")
+    return True
+
+
 def print_report(limit: int = 30):
     conn = sqlite3.connect(DB_PATH)
     _ensure_table(conn)

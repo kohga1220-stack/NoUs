@@ -40,6 +40,7 @@ Usage:
     python nous.py autoloop 1 --gen-model M   # write the hypothesis with a different (e.g. larger) Ollama model
     python nous.py autoloop --plan     # which field pairs would be explored next (no API calls); --min-shared N
     python nous.py autoloop --report   # log of past loop runs
+    python nous.py autoloop --retract hyp:27 [reason]   # take back an accepted hypothesis that is known work (leaves the knowledge base)
 
   Maintenance
     python nous.py check-llm [model ...]   # one tiny request per model: are the key and model ID usable? (exit 1 on failure)
@@ -204,6 +205,15 @@ def cmd_autoloop(args: list[str]):
         i = args.index("--min-shared")
         min_shared = int(args[i + 1])
         args = args[:i] + args[i + 2:]
+    if "--retract" in args:
+        i = args.index("--retract")
+        rest = args[i + 1:]
+        if not rest:
+            print("Usage: python nous.py autoloop --retract hyp:27 [reason]")
+            return
+        if not loop.retract(rest[0], " ".join(rest[1:]) or "retracted: known work"):
+            print(f"{rest[0]}: no such hypothesis")
+        return
     if "--plan" in args:
         loop.print_plan(min_shared=min_shared)
         return

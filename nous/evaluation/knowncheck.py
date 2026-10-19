@@ -23,6 +23,7 @@ import re
 from nous.config import DEFAULT_MODEL
 
 DEFAULT_KNOWN_MODEL = "gemini:gemini-3.6-flash"
+NUM_CTX = 8192                    # the prompt is ~3,000 tokens; Ollama's default context would cut it
 N_WORKS = 10
 ABSTRACT_CHARS = 800
 QUOTE_MIN_CHARS = 20
@@ -156,7 +157,10 @@ def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
         if search is None:
             from nous.evaluation.literature import search_prior_work as search
         if ask is None:
-            from nous.llm import generate_json as ask
+            from nous.llm import generate_json
+
+            def ask(prompt, model):
+                return generate_json(prompt, model=model, num_ctx=NUM_CTX)
         works = search(claim, n=n)
     except Exception as ex:
         return {"verdict": "unknown", "evidence": f"search failed: {type(ex).__name__}", **empty}

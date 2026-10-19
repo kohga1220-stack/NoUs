@@ -201,3 +201,31 @@ def test_check_models_masks_keys_in_error_text(monkeypatch):
         raise RuntimeError("LLM API error 400: bad key SECRETKEY_12345678 for model")
     r = llm.check_models(["gemini:x"], gen=gen)[0]
     assert not r["ok"] and "SECRETKEY" not in r["detail"] and "***" in r["detail"]
+
+
+def test_num_ctx_reaches_ollama_only_when_asked(monkeypatch):
+    import sys, types
+    seen = []
+    fake = types.SimpleNamespace(generate=lambda **kw: seen.append(kw) or {"response": "{\"a\": 1}"})
+    monkeypatch.setitem(sys.modules, "ollama", fake)
+    llm.generate("hi", model="gemma4:e2b")
+    llm.generate("hi", model="gemma4:e2b", num_ctx=8192)
+    assert "options" not in seen[0] and seen[1]["options"] == {"num_ctx": 8192}
+    assert llm.generate_json("hi", model="gemma4:e2b", num_ctx=4096) == {"a": 1}
+    assert seen[2]["options"] == {"num_ctx": 4096}
+    assert llm.generate_json("hi", model="gemma4:e2b") == {"a": 1} and "options" not in seen[3]
+
+
+def test_known_check_asks_ollama_for_a_long_enough_context(monkeypatch):
+    import sys, types
+    from nous.evaluation import knowncheck as kc
+    seen = []
+
+    def gen(**kw):
+        seen.append(kw)
+        return {"response": '{"verdict": "not_found", "why": "x"}'}
+
+    monkeypatch.setitem(sys.modules, "ollama", types.SimpleNamespace(generate=gen))
+    works = [{"work_id": "W", "title": "T", "year": 1, "text": "T. abstract"}]
+    r = kc.check_known("claim", "gemma4:e2b", search=lambda t, n: works, rewrite=False, confirm=False)
+    assert r["verdict"] == "not_found" and seen[0]["options"] == {"num_ctx": kc.NUM_CTX}

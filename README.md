@@ -99,6 +99,7 @@ python nous.py knowncheck --controls            # 有名な10例を、近い論�
 python nous.py knowncheck --controls --show             # 診断: 取得した論文の題名と、「関連」止まりの理由（why）を表示。既定は近い論文10件＋言い換え検索（--n N で件数、--no-rewrite で言い換えなし）
 python nous.py knowncheck --controls --strict           # 従来の厳しい基準（主張の全体が述べられている場合のみ「既知」）。既定は「中心の関係が述べられていれば既知」で、引用は2文まで
 python nous.py knowncheck --negatives                  # 逆の確認: 「既知にならないはずの」6件（作り話の組み合わせ、有名な原理を新しい対象に当てはめたもの）を、誤って既知と判定しないか
+python nous.py knowncheck --controls --model gemma4:e2b     # Gemini の代わりに Colab 内のローカルモデル（無料）で判定。精度を --controls / --negatives で測ってから、autoloop --known-model gemma4:e2b に切り替える
 python nous.py knowncheck hyp:26 hyp:20        # 指定した仮説の主張を、近い論文がすでに述べていないか確認（引用文を要旨と機械的に照合）
 python nous.py knowncheck --accepted --retract # 採用済みのうち「既知」と確認できたものを取り消す
 python -m nous.evaluation.survey [T]   # 棄却ルール案（最も珍しいペア／どれか1ペア／最も近い論文の類似度 T 以上）を、保存済みデータで比べる（API 呼び出しなし）

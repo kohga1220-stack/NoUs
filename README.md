@@ -96,7 +96,7 @@ python nous.py autoloop 3                 # 3サイクル：Voidペア → 橋�
 python nous.py autoloop --report          # 実行履歴
 python nous.py autoloop --retract hyp:27 [理由]   # 採用したあとに既知の内容だと分かった仮説を取り消す（記録は残し、知識ベースから外し、以後の同期にも戻さない）
 python nous.py knowncheck --controls            # 有名な10例を、近い論文を読んだ LLM（既定 Gemini）が「既知」と判定できるか確かめる
-python nous.py knowncheck --controls --show --n 10 --rewrite   # 診断用: 取得した論文の題名を表示（--show）／近い論文を10件に（--n）／主張を平易な検索文に言い換えて追加検索（--rewrite）
+python nous.py knowncheck --controls --show             # 診断: 取得した論文の題名と、「関連」止まりの理由（why）を表示。既定は近い論文10件＋言い換え検索（--n N で件数、--no-rewrite で言い換えなし）
 python nous.py knowncheck hyp:26 hyp:20        # 指定した仮説の主張を、近い論文がすでに述べていないか確認（引用文を要旨と機械的に照合）
 python nous.py knowncheck --accepted --retract # 採用済みのうち「既知」と確認できたものを取り消す
 python -m nous.evaluation.survey [T]   # 棄却ルール案（最も珍しいペア／どれか1ペア／最も近い論文の類似度 T 以上）を、保存済みデータで比べる（API 呼び出しなし）

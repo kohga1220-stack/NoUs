@@ -59,7 +59,7 @@ def test_check_known_uses_only_the_claim_and_never_raises():
         return {"verdict": "established", "work": 2, "quote": GOOD_QUOTE}
 
     long_text = "Concept A from [X] and B from [Y] share structure Z. Hypothesis H: " + "dielectric constant scales with ion radii. " * 3
-    r = kc.check_known(long_text, "m", search=search, ask=ask)
+    r = kc.check_known(long_text, "m", search=search, ask=ask, rewrite=False, confirm=False)
     assert r["verdict"] == "established" and seen["model"] == "m"
     assert seen["q"].startswith("dielectric constant scales") and "share structure Z" not in seen["prompt"]
 
@@ -159,9 +159,55 @@ def test_cli_show_prints_the_fetched_titles_and_n_is_passed_on(monkeypatch, caps
 
     def fake(text, model, **kw):
         seen.update(kw)
-        return {"verdict": "related", "works": ["Some paper (2001)"], "evidence": "", "title": None, "year": None}
+        return {"verdict": "related", "works": ["Some paper (2001)"], "evidence": "", "title": None, "year": None,
+                "why": "it studies something else"}
 
     monkeypatch.setattr(kc, "check_known", fake)
-    kc.run(["--controls", "--show", "--n", "10", "--rewrite"])
+    kc.run(["--controls", "--show"])
     out = capsys.readouterr().out
-    assert seen == {"n": 10, "rewrite": True} and out.count("- Some paper (2001)") == 10
+    assert seen == {"n": 10, "rewrite": True} and out.count("- Some paper (2001)") == 10    # new defaults
+    assert out.count("why: it studies something else") == 10
+    kc.run(["--controls", "--n", "3", "--no-rewrite"])
+    assert seen == {"n": 3, "rewrite": False}
+
+
+def _ask_flow(confirm_answer, verdict_answer=None):
+    """A model stub that answers the three kinds of question; records the order of the calls."""
+    calls = []
+
+    def ask(prompt, model):
+        if "plain search query" in prompt:
+            calls.append("rewrite")
+            return {"query": "plain"}
+        if "assert the same central claim" in prompt:
+            calls.append("confirm")
+            if isinstance(confirm_answer, Exception):
+                raise confirm_answer
+            return confirm_answer
+        calls.append("verdict")
+        return verdict_answer or {"verdict": "established", "work": 2, "quote": GOOD_QUOTE, "why": "same result"}
+
+    return ask, calls
+
+
+def test_established_must_survive_the_second_question():
+    ask, calls = _ask_flow({"same": True})
+    r = kc.check_known("claim", "m", search=lambda t, n: WORKS, ask=ask)
+    assert r["verdict"] == "established" and r["why"] == "same result"
+    assert calls == ["rewrite", "verdict", "confirm"]                       # defaults: rewrite and confirm on
+
+    ask, _ = _ask_flow({"same": False})
+    r = kc.check_known("claim", "m", search=lambda t, n: WORKS, ask=ask)
+    assert r["verdict"] == "related" and "not confirmed" in r["evidence"]   # an off-target quote does not reject
+
+    for bad in ({}, {"same": "yes"}, RuntimeError("quota")):                # unclear or unavailable -> not rejected
+        ask, _ = _ask_flow(bad)
+        r = kc.check_known("claim", "m", search=lambda t, n: WORKS, ask=ask)
+        assert r["verdict"] == "related" and "second check unavailable" in r["evidence"]
+
+
+def test_the_confirmation_is_only_asked_for_established_answers():
+    ask, calls = _ask_flow({"same": True}, verdict_answer={"verdict": "related", "why": "other claim"})
+    r = kc.check_known("claim", "m", search=lambda t, n: WORKS, ask=ask)
+    assert r["verdict"] == "related" and r["why"] == "other claim" and "confirm" not in calls
+    assert "assert the same central claim" in kc.build_confirm_prompt("c", "T", "q") and "strict" in kc.build_confirm_prompt("c", "T", "q")

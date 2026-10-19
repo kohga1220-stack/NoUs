@@ -324,6 +324,13 @@ def describe_ref(ref: str, closest: int = 3) -> str:
                      f"adjacency={adj}")
         for w in load_titles(p["a"], p["b"])[:3]:
             lines.append(f"    - {w['title'][:90]} ({w['year']})")
+    try:
+        from nous.evaluation.combination import combo_summary
+        ignored = (combo_summary(ref) or {}).get("ignored")
+    except Exception:
+        ignored = None
+    if ignored:
+        lines.append(f"  ignored for the verdict (too few works, not standard terms): {', '.join(ignored)}")
     if group:
         lines.append(f"  whole combination (reference only, not used for the verdict): {_fmt_group(group)}")
     prior = closest_prior_work(ref, k=closest)

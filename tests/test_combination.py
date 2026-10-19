@@ -442,3 +442,13 @@ def test_decompose_survives_a_failing_second_question(monkeypatch):
 
     monkeypatch.setattr(llm, "generate_json", fake)
     assert cb.decompose("Hypothesis H: something happens to something else here.") == ["a term", "b term"]
+
+
+def test_rare_term_is_ignored_when_two_standard_concepts_remain():
+    pairs = [P("A", "B", joint=300), P("A", "C", joint=0, n_a=1000, n_b=3), P("B", "C", joint=0, n_a=1000, n_b=3)]
+    r = cb.summarize({"A": 1000, "B": 1000, "C": 3}, pairs)
+    assert r["label"] == "studied" and r["ignored"] == ["C"]     # decided by the A x B pair alone
+    # with only one standard concept left nothing can be verified
+    r = cb.summarize({"A": 1000, "B": 4, "C": 3}, pairs)
+    assert r["label"] == "unrecognized_terms" and sorted(r["ignored"]) == ["B", "C"]
+    assert cb.summarize({"A": 900, "B": 900}, [P()])["ignored"] == []

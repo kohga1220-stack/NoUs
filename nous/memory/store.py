@@ -16,6 +16,7 @@ def get_recent_hypotheses(limit: int = 20) -> list[dict]:
         SELECT h.id, e.query, h.hypothesis_text, h.confidence, h.source_ids, h.timestamp
         FROM hypotheses h
         JOIN explorations e ON h.exploration_id = e.id
+        WHERE COALESCE(h.validated, 0) >= 0          -- -1 = retracted (see loop.retract)
         ORDER BY h.timestamp DESC
         LIMIT ?
     """, (limit,))

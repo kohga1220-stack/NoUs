@@ -226,3 +226,36 @@ def test_describe_ref_shows_concepts_whole_combination_and_closest_prior_work(tm
     assert "suspense × entropy" in text and "An older paper" in text
     assert "whole combination" in text and "joint=2" in text
     assert "Entropy and suspense in film" in text and "sim=0.83" in text
+
+
+def test_retract_marks_the_run_hides_the_hypothesis_and_removes_it_from_the_knowledge_base(tmp_path, monkeypatch):
+    import sqlite3
+    from nous.memory import store as mem
+    db = tmp_path / "n.db"
+    monkeypatch.setattr(loop, "DB_PATH", db)
+    monkeypatch.setattr(mem, "DB_PATH", db)
+    con = sqlite3.connect(db)
+    con.executescript("""
+        CREATE TABLE explorations (id INTEGER PRIMARY KEY, query TEXT);
+        CREATE TABLE hypotheses (id INTEGER PRIMARY KEY AUTOINCREMENT, exploration_id INTEGER,
+            hypothesis_text TEXT, confidence REAL, source_ids TEXT, validated INTEGER DEFAULT 0,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP);
+        INSERT INTO explorations VALUES (1, 'q');
+        INSERT INTO hypotheses (id, exploration_id, hypothesis_text) VALUES (26, 1, 'keep'), (27, 1, 'known work');
+    """)
+    loop._ensure_table(con)
+    con.execute("INSERT INTO loop_runs (hyp_ref, status, reward, reason) VALUES ('hyp:27', 'accepted', 0.87, 'ok')")
+    con.commit()
+    con.close()
+
+    gone = []
+    assert loop.retract("hyp:27", "known: dielectric constant of electrolytes", kb_delete=gone.append)
+    assert gone == ["hyp:27"]
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT status, reward, reason FROM loop_runs").fetchone() == (
+        "retracted", 0, "known: dielectric constant of electrolytes")
+    con.close()
+    assert [h["id"] for h in mem.get_recent_hypotheses(10)] == [26]      # not synced or listed again
+    assert not loop.retract("hyp:999", kb_delete=gone.append) and gone == ["hyp:27"]
+    with pytest.raises(ValueError):
+        loop.retract("scepter:3", kb_delete=gone.append)

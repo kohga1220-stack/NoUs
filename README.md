@@ -95,13 +95,16 @@ python nous.py autoloop 1 --gen-model M   # 仮説の生成だけ別の（大き
 python nous.py autoloop 3                 # 3サイクル：Voidペア → 橋渡し論文収集 → 仮説 → 評価 → 文献チェック → 採否
 python nous.py autoloop --report          # 実行履歴
 python nous.py autoloop --retract hyp:27 [理由]   # 採用したあとに既知の内容だと分かった仮説を取り消す（記録は残し、知識ベースから外し、以後の同期にも戻さない）
+python nous.py knowncheck --controls            # 有名な10例を、近い論文を読んだ LLM（既定 Gemini）が「既知」と判定できるか確かめる
+python nous.py knowncheck hyp:26 hyp:20        # 指定した仮説の主張を、近い論文がすでに述べていないか確認（引用文を要旨と機械的に照合）
+python nous.py knowncheck --accepted --retract # 採用済みのうち「既知」と確認できたものを取り消す
 python -m nous.evaluation.survey [T]   # 棄却ルール案（最も珍しいペア／どれか1ペア／最も近い論文の類似度 T 以上）を、保存済みデータで比べる（API 呼び出しなし）
 ```
 
 1サイクル: **直接の共起（lift）は低いのに、他の分野との繋がり方が似ている**（隣同士の隙間）未試行の分野ペアを選ぶ
 （共有論文が `--min-shared`＝既定1,000本未満のペア、および lift が低い側の半分に入らないペアは除外。過去の報酬による優先度の上乗せは小さい）→ 両分野を架橋する論文を収集・埋め込み →
 **その橋渡し論文を材料に**仮説を1つ生成 → LLM 評価 + `litcheck` + `combocheck`（仮説の主張に含まれる概念で判定）→
-**combocheck が `studied`、lit-novelty が較正済みの「既出」目安以下、または新規性を除く rubric 複合点が保存済み仮説の中央値未満なら棄却**、それ以外は採用して知識ベースへ還流。
+**combocheck が `studied`、lit-novelty が較正済みの「既出」目安以下、近い論文がその主張をすでに述べていると確認できた（known-work check：`GEMINI_API_KEY` があれば既定で有効、`--known-model none` で無効）、または新規性を除く rubric 複合点が保存済み仮説の中央値未満なら棄却**、それ以外は採用して知識ベースへ還流。
 報酬 = 採用なら（新規性を除く rubric 複合点）/5、棄却なら 0（LLM の新規性採点は人間評価より甘く、相関もなかったため報酬に使わない）。
 サイクルの最後に仮説の本文・分解した概念・共起論文の題名・概念3つ以上の全体の共起数（参考表示。判定には使わない）・litcheck で見つかった最も近い既存論文（題名・年・類似度）を表示する。`debate` は同一の問いの繰り返しを拒否する（`--force` で実行）。
 「採用」は「これらのチェックでは既存文献に見つからなかった」の意味で、新発見の主張ではない。

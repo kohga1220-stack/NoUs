@@ -15,7 +15,8 @@ One cycle
   6. check    litcheck (closest prior work) and combocheck on the concepts of the hypothesis's
               own claim (is that pairing already studied?)
   7. decide   REJECT when combocheck says `studied`, the lit-novelty is at/below the
-              calibrated "known" cut-off, or the rubric composite (without novelty) is below the
+              calibrated "known" cut-off, a close published work is found to STATE the claim already
+              (known-work check, nous/evaluation/knowncheck.py), or the rubric composite (without novelty) is below the
               median of the stored hypotheses; otherwise ACCEPT and feed it back into the
               knowledge base (`sync`). Every cycle is logged in `loop_runs`.
 
@@ -144,6 +145,15 @@ def decide(combo_label: str | None, lit_novelty: float | None,
     return True, "; ".join(notes) if notes else "not found in the literature by these checks"
 
 
+def apply_known(res: dict, reason: str) -> tuple[bool, str]:
+    """Fold the known-work verdict into an otherwise accepted hypothesis (pure).
+    Only a verified 'established' rejects; 'unknown' (search/model failure) never does."""
+    if res["verdict"] == "established":
+        return False, (f"already established: {res['title']} ({res['year']}) — "
+                       f"\"{res['evidence']}\"")
+    return True, f"{reason}; known-work check: {res['verdict']}"
+
+
 def quality_floor(composites: list[float | None]) -> float | None:
     """Median of the stored hypotheses' composites (None until there are enough of them)."""
     vals = sorted(c for c in composites if c is not None)
@@ -219,10 +229,11 @@ class Steps:
     sync: Callable[[int], None]                     # accepted hypothesis id -> knowledge base
     describe: Callable[[str], str] | None = None    # ref -> text shown after the cycle
     floor: Callable[[], float | None] | None = None # median composite of stored hypotheses
+    known: Callable[[str], dict] | None = None      # ref -> known-work verdict (see evaluation/knowncheck)
 
 
 def default_steps(model: str = DEFAULT_MODEL, abstract: bool = False,
-                  gen_model: str | None = None) -> Steps:
+                  gen_model: str | None = None, known_model: str | None = None) -> Steps:
     """`gen_model` (default: `model`) is used only to write the hypothesis; judging and the
     concept decomposition keep `model` so ratings stay comparable with the stored ones."""
     def collect(link, per_pair):
@@ -277,7 +288,14 @@ def default_steps(model: str = DEFAULT_MODEL, abstract: bool = False,
         from nous.evaluation.runner import aggregate
         return quality_floor([a["composite_excl_novelty"] for a in aggregate(store.load_scores())])
 
-    return Steps(collect, index, generate, judge, check, cutoff, sync, describe_ref, floor)
+    def known(ref):
+        from nous.evaluation import store
+        from nous.evaluation.knowncheck import check_known
+        text = next((t["text"] for t in store.load_targets() if t["ref"] == ref), "")
+        return check_known(text, known_model)
+
+    return Steps(collect, index, generate, judge, check, cutoff, sync, describe_ref, floor,
+                 known if known_model else None)
 
 
 def describe_ref(ref: str, closest: int = 3) -> str:
@@ -349,6 +367,8 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
         floor = steps.floor() if steps.floor else None
         accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff(),
                                   rec["composite"], floor)
+        if accepted and steps.known:
+            accepted, reason = apply_known(steps.known(rec["hyp_ref"]), reason)
         rec["status"], rec["reason"] = ("accepted" if accepted else "rejected"), reason
         rec["reward"] = reward_for(accepted, rec["composite"])
         if accepted:
@@ -370,8 +390,8 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
 
 def autoloop(cycles: int = 1, per_pair: int = 10, model: str = DEFAULT_MODEL,
              abstract: bool = False, verbose: bool = True, min_shared: int = MIN_SHARED,
-             gen_model: str | None = None) -> list[dict]:
-    steps = default_steps(model=model, abstract=abstract, gen_model=gen_model)
+             gen_model: str | None = None, known_model: str | None = None) -> list[dict]:
+    steps = default_steps(model=model, abstract=abstract, gen_model=gen_model, known_model=known_model)
     out = []
     for _ in range(cycles):
         rec = run_cycle(steps, per_pair=per_pair, verbose=verbose, min_shared=min_shared)

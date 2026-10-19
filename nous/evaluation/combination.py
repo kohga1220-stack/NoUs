@@ -150,7 +150,8 @@ def summarize(concept_counts: dict[str, int], pairs: list[dict],
     """
     One verdict per hypothesis.
 
-      unrecognized_terms  a concept has < MIN_KNOWN works (not a standard term)
+      unrecognized_terms  fewer than two concepts have >= MIN_KNOWN works (the others are not
+                          standard terms and are ignored; they are returned as `ignored`)
       inconclusive        every pair has zero joint works and a too-narrow concept
       unexplored          joint == 0
       few_papers          joint is 1..9
@@ -163,13 +164,16 @@ def summarize(concept_counts: dict[str, int], pairs: list[dict],
     (adjacency of the rarest pair >= adj_threshold).
     robust: the gap also survives the loose (reworded) count, i.e. loose < STUDIED_MIN.
     """
-    if not pairs or any(n < MIN_KNOWN for n in concept_counts.values()):
+    recognized = {c for c, n in concept_counts.items() if n >= MIN_KNOWN}
+    ignored = sorted(c for c in concept_counts if c not in recognized)
+    pairs = [p for p in pairs if p["a"] in recognized and p["b"] in recognized]
+    if not pairs or len(recognized) < 2:
         return {"label": "unrecognized_terms", "combo_novelty": None, "pair": None,
-                "bridge_candidate": False, "robust": False, "group": group}
+                "bridge_candidate": False, "robust": False, "group": group, "ignored": ignored}
     informative = [p for p in pairs if is_informative(p)]
     if not informative:
         return {"label": "inconclusive", "combo_novelty": None, "pair": None,
-                "bridge_candidate": False, "robust": False, "group": group}
+                "bridge_candidate": False, "robust": False, "group": group, "ignored": ignored}
     best = min(informative, key=lambda p: (p["joint"], -(p.get("adjacency") or 0.0)))
     status = pair_status(best)
     label = {"none": "unexplored", "few_papers": "few_papers", "studied": "studied"}[status]
@@ -181,7 +185,7 @@ def summarize(concept_counts: dict[str, int], pairs: list[dict],
     loose = best.get("loose")
     robust = label != "studied" and loose is not None and loose < STUDIED_MIN
     return {"label": label, "combo_novelty": novelty, "pair": best, "bridge_candidate": bridge,
-            "robust": robust, "group": group}
+            "robust": robust, "group": group, "ignored": ignored}
 
 
 _CLAIM_MARKERS = re.compile(r"hypothesis\s*(?:h)?\s*[:：]", re.IGNORECASE)
@@ -401,7 +405,8 @@ def ensure_phenomenon(text: str, concepts: list[str], model: str) -> list[str]:
     prompt = f"""In this research hypothesis, what is the outcome or quantity the claim says
 is affected, changed or predicted? Answer with ONE standard academic term of 1-4 words, as it
 would appear in a paper title (for example "acceptability threshold", "opinion polarization",
-"tendon stiffness"). Not a method, not a theory.
+"tendon stiffness"). Not a method, not a theory, and do not coin a compound such as
+"X variance", "X difference" or "X improvement": use the established name of the quantity.
 
 HYPOTHESIS CLAIM:
 {claim_text(text)[:1500]}

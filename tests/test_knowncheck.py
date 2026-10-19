@@ -108,7 +108,7 @@ def test_known_check_is_not_called_for_hypotheses_already_rejected(env):
 def test_cli_controls_and_accepted_retract(monkeypatch, capsys):
     from nous.evaluation import store
     calls = []
-    monkeypatch.setattr(kc, "check_known", lambda text, model: {
+    monkeypatch.setattr(kc, "check_known", lambda text, model, **kw: {
         "verdict": "established" if "MARKER" in text else "related", "title": "T", "year": 2001, "evidence": "q"})
     monkeypatch.setattr(kc, "_accepted_refs", lambda: ["hyp:1", "hyp:2"])
     monkeypatch.setattr(store, "load_targets", lambda *a, **k: [{"ref": "hyp:1", "text": "MARKER claim"},
@@ -118,3 +118,50 @@ def test_cli_controls_and_accepted_retract(monkeypatch, capsys):
     assert [c[0] for c in calls] == ["hyp:1"] and calls[0][1].startswith("retracted: established: T")
     kc.run(["--controls"])
     assert "flagged as established: 0/10" in capsys.readouterr().out
+
+
+def test_rewrite_adds_results_from_a_plain_query_without_duplicates_and_respects_n():
+    queries = []
+
+    def search(text, n):
+        queries.append(text)
+        if text.startswith("PLAIN"):
+            return [{"work_id": "W2", "title": "Second", "year": 2, "text": "t"},
+                    {"work_id": "W9", "title": "Ninth", "year": 9, "text": "t"}]
+        return [{"work_id": "W1", "title": "First", "year": 1, "text": "t"},
+                {"work_id": "W2", "title": "Second", "year": 2, "text": "t"}]
+
+    def ask(prompt, model):
+        if "plain search query" in prompt:
+            return {"query": "PLAIN claim"}
+        assert "[1] First" in prompt and "[3] Ninth" in prompt            # merged, no duplicate of W2
+        return {"verdict": "not_found"}
+
+    r = kc.check_known("claim text long enough", "m", n=3, search=search, ask=ask, rewrite=True)
+    assert queries == ["claim text long enough", "PLAIN claim"]
+    assert r["verdict"] == "not_found"
+    assert r["works"] == ["First (1)", "Second (2)", "Ninth (9)"]
+    assert len(kc._merge([{"work_id": str(i), "title": str(i)} for i in range(5)], [], 2)) == 2
+
+
+def test_rewrite_failure_falls_back_to_the_plain_results():
+    def ask(prompt, model):
+        if "plain search query" in prompt:
+            raise RuntimeError("quota")
+        return {"verdict": "related"}
+
+    r = kc.check_known("claim", "m", search=lambda t, n: WORKS, ask=ask, rewrite=True)
+    assert r["verdict"] == "related" and len(r["works"]) == 2
+
+
+def test_cli_show_prints_the_fetched_titles_and_n_is_passed_on(monkeypatch, capsys):
+    seen = {}
+
+    def fake(text, model, **kw):
+        seen.update(kw)
+        return {"verdict": "related", "works": ["Some paper (2001)"], "evidence": "", "title": None, "year": None}
+
+    monkeypatch.setattr(kc, "check_known", fake)
+    kc.run(["--controls", "--show", "--n", "10", "--rewrite"])
+    out = capsys.readouterr().out
+    assert seen == {"n": 10, "rewrite": True} and out.count("- Some paper (2001)") == 10

@@ -159,3 +159,45 @@ def test_free_tier_403_gets_a_hint_and_no_retry(monkeypatch):
     with pytest.raises(RuntimeError, match="403") as ei:
         llm._post_json("u", {}, {})
     assert "有料モデル" in str(ei.value) and len(calls) == 1
+
+
+def test_check_models_reports_each_model_and_never_raises():
+    def gen(prompt, model):
+        if model == "bad":
+            raise RuntimeError("LLM API error 404: model not found")
+        if model == "empty":
+            return "  "
+        return "OK\n"
+
+    r = {x["model"]: x for x in llm.check_models(["good", "bad", "empty"], gen=gen)}
+    assert r["good"]["ok"] and r["good"]["detail"] == "OK"
+    assert not r["bad"]["ok"] and "404" in r["bad"]["detail"] and r["bad"]["detail"].startswith("RuntimeError")
+    assert not r["empty"]["ok"] and r["empty"]["detail"] == "empty answer"
+
+
+def test_check_llm_command_exit_status(monkeypatch, capsys):
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location("nous_cli", pathlib.Path(__file__).parent.parent / "nous.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setattr(llm, "check_models", lambda models, gen=None: [
+        {"model": models[0], "ok": True, "seconds": 0.5, "detail": "OK"}])
+    assert cli.cmd_check_llm(["gemini:x"]) is True
+    assert "OK  gemini:x" in capsys.readouterr().out
+    monkeypatch.setattr(llm, "check_models", lambda models, gen=None: [
+        {"model": models[0], "ok": False, "seconds": 0.5, "detail": "RuntimeError: key unset"}])
+    assert cli.cmd_check_llm(["gemini:x"]) is False
+
+
+def test_check_models_treats_empty_whitespace_and_none_as_failure():
+    for answer in ("", "   \n", None):
+        r = llm.check_models(["m"], gen=lambda prompt, model, a=answer: a)[0]
+        assert not r["ok"] and r["detail"] == "empty answer"
+
+
+def test_check_models_masks_keys_in_error_text(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRETKEY_12345678")
+    def gen(prompt, model):
+        raise RuntimeError("LLM API error 400: bad key SECRETKEY_12345678 for model")
+    r = llm.check_models(["gemini:x"], gen=gen)[0]
+    assert not r["ok"] and "SECRETKEY" not in r["detail"] and "***" in r["detail"]

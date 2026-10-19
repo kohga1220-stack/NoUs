@@ -165,10 +165,12 @@ def test_cli_show_prints_the_fetched_titles_and_n_is_passed_on(monkeypatch, caps
     monkeypatch.setattr(kc, "check_known", fake)
     kc.run(["--controls", "--show"])
     out = capsys.readouterr().out
-    assert seen == {"n": 10, "rewrite": True} and out.count("- Some paper (2001)") == 10    # new defaults
+    assert seen == {"n": 10, "rewrite": True, "strict": False} and out.count("- Some paper (2001)") == 10
     assert out.count("why: it studies something else") == 10
     kc.run(["--controls", "--n", "3", "--no-rewrite"])
-    assert seen == {"n": 3, "rewrite": False}
+    assert seen == {"n": 3, "rewrite": False, "strict": False}
+    kc.run(["--controls", "--strict"])
+    assert seen["strict"] is True
 
 
 def _ask_flow(confirm_answer, verdict_answer=None):
@@ -211,3 +213,32 @@ def test_the_confirmation_is_only_asked_for_established_answers():
     r = kc.check_known("claim", "m", search=lambda t, n: WORKS, ask=ask)
     assert r["verdict"] == "related" and r["why"] == "other claim" and "confirm" not in calls
     assert "assert the same central claim" in kc.build_confirm_prompt("c", "T", "q") and "strict" in kc.build_confirm_prompt("c", "T", "q")
+
+
+def test_the_central_claim_wording_is_the_default_and_strict_is_kept_for_comparison():
+    central = kc.build_prompt("claim", WORKS)
+    strict = kc.build_prompt("claim", WORKS, strict=True)
+    assert "CENTRAL claim" in central and "do not matter" in central and "CENTRAL claim" not in strict
+    assert "THIS specific claim" in strict
+    assert "one or two consecutive sentences" in central and "350" in central
+    seen = {}
+
+    def ask(prompt, model):
+        if "assert the same central claim" in prompt:
+            return {"same": True}
+        seen["strict"] = "THIS specific claim" in prompt
+        return {"verdict": "related"}
+
+    kc.check_known("c", "m", search=lambda t, n: WORKS, ask=ask, rewrite=False, strict=True)
+    assert seen["strict"] is True
+
+
+def test_a_two_sentence_quote_is_accepted_and_kept_up_to_the_limit():
+    two = ("Allometric scaling relations include the 3/4 power law for metabolic rate. "
+           "We derive them from space filling fractal branching networks distributing resources.")
+    works = [{"work_id": "W", "title": "WBE", "year": 1997, "text": "WBE. " + two + " More text."}]
+    r = kc.parse_verdict({"verdict": "established", "work": 1, "quote": two}, works)
+    assert r["verdict"] == "established" and r["evidence"] == two
+    long_quote = "x" * 400
+    assert len(kc.parse_verdict({"verdict": "established", "work": 1, "quote": two + " " + long_quote},
+                                [{"title": "T", "year": 1, "text": two + " " + long_quote}])["evidence"]) <= 350

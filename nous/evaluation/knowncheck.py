@@ -15,7 +15,7 @@ claim?") is answered no, the answer is downgraded to 'related' (an invented or o
 must never reject a hypothesis). Any failure (search, model, malformed answer) gives 'unknown', which never
 rejects. Cost: one OpenAlex semantic search + one LLM call per hypothesis.
 
-Usage:  python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--show] [--controls | --accepted [--retract] | hyp:26 ...]
+Usage:  python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--strict] [--show] [--controls | --accepted [--retract] | hyp:26 ...]
 """
 from __future__ import annotations
 import re
@@ -26,11 +26,24 @@ DEFAULT_KNOWN_MODEL = "gemini:gemini-3.6-flash"
 N_WORKS = 10
 ABSTRACT_CHARS = 800
 QUOTE_MIN_CHARS = 20
+QUOTE_MAX_CHARS = 350             # one or two sentences
 QUOTE_MIN_OVERLAP = 0.7           # share of the quote's words (>= 4 letters) found in the abstract
 VERDICTS = ("established", "related", "not_found")
 
 
-def build_prompt(claim: str, works: list[dict]) -> str:
+_DEFINITION = {
+    # live run on 10 famous ideas, strict wording: 5/10 found; the model kept answering 'related'
+    # because no work repeated EVERY part of a multi-part claim (e.g. Bak-Tang-Wiesenfeld 1988 itself)
+    True: """- "established": one of the works states or directly tests THIS specific claim (the same variables
+  AND the same kind of relationship). Being on the same topic is NOT enough.""",
+    False: """- "established": one of the works states or directly tests the CENTRAL claim of the hypothesis, i.e.
+  its main relationship between the variables. Parts of the hypothesis that the work does not mention
+  (extra examples, mechanisms, numbers, applications) do not matter as long as the work does not
+  contradict them. Being on the same topic is NOT enough: the work must assert that relationship.""",
+}
+
+
+def build_prompt(claim: str, works: list[dict], strict: bool = False) -> str:
     listed = "\n\n".join(f"[{i + 1}] {w['title']} ({w.get('year')})\n{(w.get('text') or '')[:ABSTRACT_CHARS]}"
                          for i, w in enumerate(works))
     return f"""You check whether a research hypothesis is ALREADY established in the published literature.
@@ -42,14 +55,13 @@ PUBLISHED WORKS (title, year, abstract):
 {listed}
 
 Decide, using ONLY the works above:
-- "established": one of the works states or directly tests THIS specific claim (the same variables
-  AND the same kind of relationship). Being on the same topic is NOT enough.
-- "related": the works study the same topic or variables, but none states this claim.
+{_DEFINITION[strict]}
+- "related": the works study the same topic or variables, but none states that claim.
 - "not_found": none of the works is about this claim.
-For "established", give the number of that work and copy ONE short sentence from its abstract
-(at most 200 characters, exactly as written) that states the claim.
+For "established", give the number of that work and copy one or two consecutive sentences from its
+abstract (at most {QUOTE_MAX_CHARS} characters, exactly as written) that state the claim.
 
-Respond ONLY with JSON: {{"verdict": "established" | "related" | "not_found", "work": <number or null>, "quote": "<sentence or empty>", "why": "<one short sentence: what the closest work says, and how it differs if not established>"}}"""
+Respond ONLY with JSON: {{"verdict": "established" | "related" | "not_found", "work": <number or null>, "quote": "<sentences or empty>", "why": "<one short sentence: what the closest work says, and how it differs if not established>"}}"""
 
 
 def build_rewrite_prompt(claim: str) -> str:
@@ -108,7 +120,7 @@ def parse_verdict(data, works: list[dict]) -> dict:
         out["verdict"] = "related"
         out["evidence"] = "claimed established, but the quote was not found in the cited abstract"
         return out
-    out.update(work=idx, title=work["title"], year=work.get("year"), evidence=quote[:200])
+    out.update(work=idx, title=work["title"], year=work.get("year"), evidence=quote[:QUOTE_MAX_CHARS])
     return out
 
 
@@ -127,7 +139,8 @@ def _merge(first: list[dict], second: list[dict], n: int) -> list[dict]:
 
 
 def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
-                search=None, ask=None, rewrite: bool = True, confirm: bool = True) -> dict:
+                search=None, ask=None, rewrite: bool = True, confirm: bool = True,
+                strict: bool = False) -> dict:
     """Never raises: any failure is reported as verdict 'unknown'.
     rewrite: also search with a short plain-language version of the claim (one more model
     call); the two result lists are merged (live check on 10 famous ideas: 5/10 -> 8/10 found).
@@ -155,7 +168,7 @@ def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
     if not works:
         return {"verdict": "not_found", "evidence": "no works returned", **empty}
     try:
-        data = ask(build_prompt(claim, works), model=model)
+        data = ask(build_prompt(claim, works, strict), model=model)
     except Exception as ex:
         return {"verdict": "unknown", "evidence": f"model failed: {type(ex).__name__}",
                 **{**empty, "works": titles}}
@@ -208,7 +221,7 @@ def run(args: list[str]) -> None:
         i = args.index("--n")
         n = int(args[i + 1])
         args = args[:i] + args[i + 2:]
-    opts = dict(n=n, rewrite=rewrite)
+    opts = dict(n=n, rewrite=rewrite, strict="--strict" in args)
     retract = "--retract" in args
     if "--controls" in args:
         hits = 0
@@ -226,7 +239,7 @@ def run(args: list[str]) -> None:
         return
     refs = _accepted_refs() if "--accepted" in args else [a for a in args if not a.startswith("--")]
     if not refs:
-        print("Usage: python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--show] "
+        print("Usage: python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--strict] [--show] "
               "[--controls | --accepted [--retract] | hyp:26 ...]")
         return
     texts = {t["ref"]: t["text"] for t in store.load_targets()}

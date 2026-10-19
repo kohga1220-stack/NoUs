@@ -242,3 +242,21 @@ def test_a_two_sentence_quote_is_accepted_and_kept_up_to_the_limit():
     long_quote = "x" * 400
     assert len(kc.parse_verdict({"verdict": "established", "work": 1, "quote": two + " " + long_quote},
                                 [{"title": "T", "year": 1, "text": two + " " + long_quote}])["evidence"]) <= 350
+
+
+def test_the_central_claim_wording_keeps_new_applications_out_of_general_principles():
+    central = kc.build_prompt("claim", WORKS)
+    assert "applies a known principle to a NEW system" in central and "does NOT" in central
+    assert "NEW system" not in kc.build_prompt("claim", WORKS, strict=True)
+
+
+def test_cli_negatives_counts_false_positives(monkeypatch, capsys):
+    def fake(text, model, **kw):
+        verdict = "established" if "oven temperature" in text else "related"
+        return {"verdict": verdict, "works": [], "evidence": "q", "title": "T", "year": 2000, "why": ""}
+
+    monkeypatch.setattr(kc, "check_known", fake)
+    kc.run(["--negatives"])
+    out = capsys.readouterr().out
+    assert "wrongly flagged as established: 1/6" in out and len(kc.NEGATIVE_CONTROLS) == 6
+    assert all(len(t) > 60 for _, t in kc.NEGATIVE_CONTROLS)

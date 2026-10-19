@@ -185,19 +185,29 @@ CHECK_PROMPT = "Reply with the single word OK."
 def check_models(models: list[str], gen=None) -> list[dict]:
     """
     Send one tiny prompt to each model and report whether it answered, and how fast.
-    Used to verify keys and model IDs before a long run. A failure is reported, not raised;
-    the error text is what the provider call raised (it never contains the API key).
+    Used to verify keys and model IDs before a long run. A failure is reported, not raised.
+    An empty (or whitespace-only, or None) answer is a failure. Any API key / token value that
+    appears in an error text is replaced with ***, since the output is often pasted into chats.
     """
+    import os
     import time
     gen = gen or generate
+    secrets = [v for k in ("GEMINI_API_KEY", "OPENCODE_API_KEY", "GH_TOKEN", "OPENALEX_API_KEY")
+               if len(v := os.environ.get(k, "")) >= 8]
+
+    def mask(text: str) -> str:
+        for v in secrets:
+            text = text.replace(v, "***")
+        return text
+
     out = []
     for m in models:
         t0 = time.time()
         try:
-            answer = gen(CHECK_PROMPT, model=m).strip()
+            answer = (gen(CHECK_PROMPT, model=m) or "").strip()
             out.append({"model": m, "ok": bool(answer), "seconds": time.time() - t0,
-                        "detail": answer[:60] or "empty answer"})
+                        "detail": mask(answer[:60]) or "empty answer"})
         except Exception as ex:                     # network, key, model ID, quota ...
             out.append({"model": m, "ok": False, "seconds": time.time() - t0,
-                        "detail": f"{type(ex).__name__}: {str(ex)[:200]}"})
+                        "detail": mask(f"{type(ex).__name__}: {str(ex)[:200]}")})
     return out

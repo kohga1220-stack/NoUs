@@ -187,3 +187,17 @@ def test_check_llm_command_exit_status(monkeypatch, capsys):
     monkeypatch.setattr(llm, "check_models", lambda models, gen=None: [
         {"model": models[0], "ok": False, "seconds": 0.5, "detail": "RuntimeError: key unset"}])
     assert cli.cmd_check_llm(["gemini:x"]) is False
+
+
+def test_check_models_treats_empty_whitespace_and_none_as_failure():
+    for answer in ("", "   \n", None):
+        r = llm.check_models(["m"], gen=lambda prompt, model, a=answer: a)[0]
+        assert not r["ok"] and r["detail"] == "empty answer"
+
+
+def test_check_models_masks_keys_in_error_text(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "SECRETKEY_12345678")
+    def gen(prompt, model):
+        raise RuntimeError("LLM API error 400: bad key SECRETKEY_12345678 for model")
+    r = llm.check_models(["gemini:x"], gen=gen)[0]
+    assert not r["ok"] and "SECRETKEY" not in r["detail"] and "***" in r["detail"]

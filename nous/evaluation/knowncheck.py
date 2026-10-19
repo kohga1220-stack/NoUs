@@ -10,11 +10,12 @@ fetched with their abstracts and an LLM is asked, per hypothesis, one narrow que
   not_found    nothing listed is about it
 
 An 'established' answer must quote the work. The quote is checked against the abstract text; if
-it cannot be found there, the answer is downgraded to 'related' (an invented quote must never
-reject a hypothesis). Any failure (search, model, malformed answer) gives 'unknown', which never
+it cannot be found there, or a second, separate question ("does this quote assert the same central
+claim?") is answered no, the answer is downgraded to 'related' (an invented or off-target quote
+must never reject a hypothesis). Any failure (search, model, malformed answer) gives 'unknown', which never
 rejects. Cost: one OpenAlex semantic search + one LLM call per hypothesis.
 
-Usage:  python nous.py knowncheck [--model M] [--n N] [--rewrite] [--show] [--controls | --accepted [--retract] | hyp:26 ...]
+Usage:  python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--show] [--controls | --accepted [--retract] | hyp:26 ...]
 """
 from __future__ import annotations
 import re
@@ -22,7 +23,7 @@ import re
 from nous.config import DEFAULT_MODEL
 
 DEFAULT_KNOWN_MODEL = "gemini:gemini-3.6-flash"
-N_WORKS = 5
+N_WORKS = 10
 ABSTRACT_CHARS = 800
 QUOTE_MIN_CHARS = 20
 QUOTE_MIN_OVERLAP = 0.7           # share of the quote's words (>= 4 letters) found in the abstract
@@ -48,7 +49,7 @@ Decide, using ONLY the works above:
 For "established", give the number of that work and copy ONE short sentence from its abstract
 (at most 200 characters, exactly as written) that states the claim.
 
-Respond ONLY with JSON: {{"verdict": "established" | "related" | "not_found", "work": <number or null>, "quote": "<sentence or empty>"}}"""
+Respond ONLY with JSON: {{"verdict": "established" | "related" | "not_found", "work": <number or null>, "quote": "<sentence or empty>", "why": "<one short sentence: what the closest work says, and how it differs if not established>"}}"""
 
 
 def build_rewrite_prompt(claim: str) -> str:
@@ -60,6 +61,20 @@ HYPOTHESIS:
 {claim[:1500]}
 
 Respond ONLY with JSON: {{"query": "<one or two sentences>"}}"""
+
+
+def build_confirm_prompt(claim: str, title: str, quote: str) -> str:
+    return f"""Does this sentence from a published abstract assert the same central claim as the hypothesis?
+Be strict: the same topic is not enough; the same variables and the same kind of relationship are needed.
+Details the hypothesis adds on top of the central claim do not matter.
+
+HYPOTHESIS:
+{claim[:1500]}
+
+SENTENCE (from "{title}"):
+{quote}
+
+Respond ONLY with JSON: {{"same": true | false}}"""
 
 
 def _words(text: str) -> list[str]:
@@ -79,10 +94,11 @@ def quote_supported(quote: str, text: str) -> bool:
 
 def parse_verdict(data, works: list[dict]) -> dict:
     """LLM JSON -> {verdict, work, title, year, evidence}; an unverifiable 'established' becomes 'related'."""
-    out = {"verdict": "unknown", "work": None, "title": None, "year": None, "evidence": ""}
+    out = {"verdict": "unknown", "work": None, "title": None, "year": None, "evidence": "", "why": ""}
     if not isinstance(data, dict) or data.get("verdict") not in VERDICTS:
         return out
     out["verdict"] = data["verdict"]
+    out["why"] = str(data.get("why") or "")[:200]
     if out["verdict"] != "established":
         return out
     idx = data.get("work")
@@ -111,10 +127,12 @@ def _merge(first: list[dict], second: list[dict], n: int) -> list[dict]:
 
 
 def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
-                search=None, ask=None, rewrite: bool = False) -> dict:
+                search=None, ask=None, rewrite: bool = True, confirm: bool = True) -> dict:
     """Never raises: any failure is reported as verdict 'unknown'.
-    rewrite=True also searches with a short plain-language version of the claim (one more
-    model call); the two result lists are merged."""
+    rewrite: also search with a short plain-language version of the claim (one more model
+    call); the two result lists are merged (live check on 10 famous ideas: 5/10 -> 8/10 found).
+    confirm: an 'established' answer must survive a second, separate yes/no question about its
+    quote (a live run accepted a quote about body size for a claim about neocortex size)."""
     from nous.evaluation.combination import claim_text
     claim = claim_text(text)
     empty = {"work": None, "title": None, "year": None, "works": []}
@@ -143,6 +161,14 @@ def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
                 **{**empty, "works": titles}}
     res = parse_verdict(data, works)
     res["works"] = titles
+    if confirm and res["verdict"] == "established":
+        try:
+            same = (ask(build_confirm_prompt(claim, res["title"], res["evidence"]), model=model) or {}).get("same")
+        except Exception:
+            same = None
+        if same is not True:
+            res.update(verdict="related", evidence="the quote was not confirmed as the same claim"
+                       if same is False else "second check unavailable; not rejecting")
     return res
 
 
@@ -177,7 +203,7 @@ def run(args: list[str]) -> None:
         i = args.index("--model")
         model = args[i + 1]
         args = args[:i] + args[i + 2:]
-    n, rewrite, show = N_WORKS, "--rewrite" in args, "--show" in args
+    n, rewrite, show = N_WORKS, "--no-rewrite" not in args, "--show" in args
     if "--n" in args:
         i = args.index("--n")
         n = int(args[i + 1])
@@ -192,13 +218,15 @@ def run(args: list[str]) -> None:
             hits += r["verdict"] == "established"
             print(f"  {label:<30} {describe(r)[:150]}")
             if show:
+                if r.get("why"):
+                    print(f"        why: {r['why']}")
                 for t in r["works"]:
                     print(f"        - {t}")
         print(f"\nflagged as established: {hits}/{len(KNOWN_IDEAS)}  (all should be)")
         return
     refs = _accepted_refs() if "--accepted" in args else [a for a in args if not a.startswith("--")]
     if not refs:
-        print("Usage: python nous.py knowncheck [--model M] [--n N] [--rewrite] [--show] "
+        print("Usage: python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--show] "
               "[--controls | --accepted [--retract] | hyp:26 ...]")
         return
     texts = {t["ref"]: t["text"] for t in store.load_targets()}
@@ -210,6 +238,8 @@ def run(args: list[str]) -> None:
         r = check_known(texts[ref], model, **opts)
         print(f"  {ref:<11} {describe(r)[:220]}")
         if show:
+            if r.get("why"):
+                print(f"        why: {r['why']}")
             for t in r["works"]:
                 print(f"        - {t}")
         if retract and r["verdict"] == "established":

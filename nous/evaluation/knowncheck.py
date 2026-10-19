@@ -23,6 +23,7 @@ import re
 from nous.config import DEFAULT_MODEL
 
 DEFAULT_KNOWN_MODEL = "gemini:gemini-3.6-flash"
+LOCAL_KNOWN_MODEL = "gemma4:12b"   # free; live check on the 10 famous ideas: 8/10 found, 0/6 false (gemma4:e2b: 3/10)
 NUM_CTX = 8192                    # the prompt is ~3,000 tokens; Ollama's default context would cut it
 N_WORKS = 10
 ABSTRACT_CHARS = 800
@@ -45,6 +46,22 @@ _DEFINITION = {
   IS its central claim: a work that states only the general principle (for other systems) does NOT
   establish it.""",
 }
+
+
+def default_known_model() -> str | None:
+    """The model used when none is given: the local gemma4:12b if Ollama has it (free), else Gemini
+    if GEMINI_API_KEY is set, else None (the check is off)."""
+    import os
+    try:
+        import ollama
+        res = ollama.list()
+        models = res["models"] if isinstance(res, dict) else getattr(res, "models", [])
+        names = {(m["model"] if isinstance(m, dict) else getattr(m, "model", "")) for m in models}
+        if LOCAL_KNOWN_MODEL in names:
+            return LOCAL_KNOWN_MODEL
+    except Exception:
+        pass
+    return DEFAULT_KNOWN_MODEL if os.environ.get("GEMINI_API_KEY") else None
 
 
 def build_prompt(claim: str, works: list[dict], strict: bool = False) -> str:
@@ -242,7 +259,7 @@ def _accepted_refs() -> list[str]:
 def run(args: list[str]) -> None:
     from nous.evaluation import store
     from nous.evaluation.literature import KNOWN_IDEAS
-    model = DEFAULT_KNOWN_MODEL
+    model = default_known_model() or DEFAULT_KNOWN_MODEL
     if "--model" in args:
         i = args.index("--model")
         model = args[i + 1]

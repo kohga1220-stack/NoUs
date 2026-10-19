@@ -15,7 +15,7 @@ claim?") is answered no, the answer is downgraded to 'related' (an invented or o
 must never reject a hypothesis). Any failure (search, model, malformed answer) gives 'unknown', which never
 rejects. Cost: one OpenAlex semantic search + one LLM call per hypothesis.
 
-Usage:  python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--strict] [--show] [--controls | --accepted [--retract] | hyp:26 ...]
+Usage:  python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--strict] [--show] [--controls | --negatives | --accepted [--retract] | hyp:26 ...]
 """
 from __future__ import annotations
 import re
@@ -38,8 +38,11 @@ _DEFINITION = {
   AND the same kind of relationship). Being on the same topic is NOT enough.""",
     False: """- "established": one of the works states or directly tests the CENTRAL claim of the hypothesis, i.e.
   its main relationship between the variables. Parts of the hypothesis that the work does not mention
-  (extra examples, mechanisms, numbers, applications) do not matter as long as the work does not
-  contradict them. Being on the same topic is NOT enough: the work must assert that relationship.""",
+  (extra examples, mechanisms, numbers) do not matter as long as the work does not contradict them.
+  Being on the same topic is NOT enough: the work must assert that relationship.
+  If the hypothesis applies a known principle to a NEW system, quantity or factor, then that application
+  IS its central claim: a work that states only the general principle (for other systems) does NOT
+  establish it.""",
 }
 
 
@@ -191,6 +194,30 @@ def describe(res: dict) -> str:
     return f"{res['verdict']}" + (f" ({res['evidence']})" if res.get("evidence") else "")
 
 
+# Claims that no published work should state (invented cross-domain links, and known principles
+# applied to a new system or factor). A good check never calls any of them 'established'.
+NEGATIVE_CONTROLS: list[tuple[str, str]] = [
+    ("gravitational waves x dental caries",
+     "The amplitude of the gravitational wave background determines the incidence of dental caries, "
+     "because tidal strain modulates the remineralization of tooth enamel."),
+    ("sourdough as a critical system",
+     "Sourdough starter microbial populations organize themselves into a critical state, so that small "
+     "changes in the feeding schedule trigger avalanches of acidity change whose sizes follow a power law."),
+    ("cathode packing x mosaic entropy",
+     "The packing density of lithium-ion cathode particles sets the information entropy of Byzantine "
+     "mosaic tile patterns, because both are governed by the same space-filling constraint."),
+    ("Ising opinions among bakers (hard)",
+     "Opinion dynamics among sourdough bakers follow Ising-model dynamics, with the coupling strength "
+     "set by oven temperature."),
+    ("3/4 scaling of poets (hard)",
+     "The number of followers of a poet on social media scales with the three-quarter power of the "
+     "poet's body mass, because attention is distributed through fractal branching networks."),
+    ("integrated information of sourdough (hard)",
+     "A sourdough colony is conscious to the extent that it integrates information as a whole, and this "
+     "integration increases with the hydration level of the dough."),
+]
+
+
 # ------------------------------------------------------------------ #
 #  Command line                                                       #
 # ------------------------------------------------------------------ #
@@ -223,6 +250,20 @@ def run(args: list[str]) -> None:
         args = args[:i] + args[i + 2:]
     opts = dict(n=n, rewrite=rewrite, strict="--strict" in args)
     retract = "--retract" in args
+    if "--negatives" in args:
+        hits = 0
+        print(f"claims that should NOT be established, judged by {model}:")
+        for label, text in NEGATIVE_CONTROLS:
+            r = check_known(text, model, **opts)
+            hits += r["verdict"] == "established"
+            print(f"  {label:<44} {describe(r)[:150]}")
+            if show:
+                if r.get("why"):
+                    print(f"        why: {r['why']}")
+                for t in r["works"]:
+                    print(f"        - {t}")
+        print(f"\nwrongly flagged as established: {hits}/{len(NEGATIVE_CONTROLS)}  (should be 0)")
+        return
     if "--controls" in args:
         hits = 0
         print(f"famous (known) ideas, judged by {model}:")
@@ -240,7 +281,7 @@ def run(args: list[str]) -> None:
     refs = _accepted_refs() if "--accepted" in args else [a for a in args if not a.startswith("--")]
     if not refs:
         print("Usage: python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--strict] [--show] "
-              "[--controls | --accepted [--retract] | hyp:26 ...]")
+              "[--controls | --negatives | --accepted [--retract] | hyp:26 ...]")
         return
     texts = {t["ref"]: t["text"] for t in store.load_targets()}
     from nous import loop

@@ -6,3 +6,7 @@ __pycache__/
 # Runtime data (SQLite, ChromaDB, raw texts, rendered graphs)
 data/
 lib/
+
+# 浄土 (Obsidian vault export): personal notes and paper abstracts, never committed
+浄土/
+vault_out/

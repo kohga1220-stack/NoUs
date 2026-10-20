@@ -46,6 +46,8 @@ Usage:
     python nous.py autoloop --retract hyp:27 [reason]   # take back an accepted hypothesis that is known work (leaves the knowledge base)
 
   Maintenance
+    python nous.py vault [--out DIR] [--force]   # write the 浄土 (Obsidian vault) from the database; default folder: Drive/AI/projects/浄土
+    python nous.py vault --promote hyp:31 [note] # a human moves a hypothesis to the 善見天 (--unpromote hyp:31 undoes it)
     python nous.py check-llm [model ...]   # one tiny request per model: are the key and model ID usable? (exit 1 on failure)
     python nous.py migrate-domains     # Rename legacy domains (physics, ...) to OpenAlex fields
 """
@@ -260,6 +262,33 @@ def cmd_knowncheck(args: list[str]):
     run(args)
 
 
+def cmd_vault(args: list[str]):
+    from nous import vault
+    for flag, mark in (("--promote", vault.MARK_PROMOTE), ("--unpromote", None)):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args) or ":" not in args[i + 1]:
+                print(f"Usage: python nous.py vault {flag} hyp:31" + (" [note]" if mark else ""))
+                return
+            note = " ".join(a for a in args[i + 2:] if not a.startswith("--")) if mark else ""
+            vault.mark_hypothesis(args[i + 1], mark, note)
+            print(f"{args[i + 1]}: " + ("promoted to 善見天" if mark else "promotion cleared") + " (applied at the next export)")
+            return
+    out = args[args.index("--out") + 1] if "--out" in args and args.index("--out") + 1 < len(args) else None
+    from nous.colab_setup import MIN_DB_BYTES
+    from nous.config import DB_PATH
+    size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    if size < MIN_DB_BYTES:
+        print(f"STOPPED: nous.db is only {size:,} bytes — not exporting (it would look like an empty memory).")
+        sys.exit(1)
+    st = vault.export(out=out, force="--force" in args)
+    print(f"浄土 → {st['out']}\n  notes {st['notes']} (written {st['written']}, unchanged {st['unchanged']}, "
+          f"removed {st['removed']}); hypotheses {st['hypotheses']}")
+    if st["kept_stale"]:
+        print(f"  NOTE: {st['kept_stale']} older notes were kept: this export is much smaller than the last. "
+              "Use --force if that is intended.")
+
+
 def cmd_check_llm(models: list[str]) -> bool:
     from nous.llm import check_models
     results = check_models(models or [DEFAULT_MODEL])
@@ -382,6 +411,8 @@ def main():
         cmd_combocheck(rest[0] if rest else DEFAULT_MODEL, report_only="--report" in args)
     elif cmd == "autoloop":
         cmd_autoloop(args[1:])
+    elif cmd == "vault":
+        cmd_vault(args[1:])
     elif cmd == "knowncheck":
         cmd_knowncheck(args[1:])
     elif cmd == "check-llm":

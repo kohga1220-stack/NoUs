@@ -217,6 +217,30 @@ def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
     return res
 
 
+def save_result(ref: str, model: str, res: dict, db_path=None) -> None:
+    """Keep the verdict (and the works it was based on) in the database, so that the 浄土 vault can
+    show *why* a hypothesis was judged known / related. Never raises: a failed save must not
+    cost the cycle."""
+    import json
+    import sqlite3
+    from nous.config import DB_PATH
+    try:
+        conn = sqlite3.connect(db_path or DB_PATH)
+        conn.execute("""CREATE TABLE IF NOT EXISTS known_checks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, target_ref TEXT, model TEXT, verdict TEXT,
+            why TEXT, title TEXT, year INTEGER, evidence TEXT, works TEXT,
+            checked_at DATETIME DEFAULT CURRENT_TIMESTAMP)""")
+        conn.execute("""INSERT INTO known_checks (target_ref, model, verdict, why, title, year, evidence, works)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                     (ref, model, res.get("verdict"), res.get("why") or "", res.get("title"),
+                      res.get("year"), res.get("evidence") or "",
+                      json.dumps(res.get("works") or [], ensure_ascii=False)))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 def describe(res: dict) -> str:
     if res["verdict"] == "established":
         return f"established: {res['title']} ({res['year']}) — \"{res['evidence']}\""
@@ -319,6 +343,7 @@ def run(args: list[str]) -> None:
             print(f"  {ref:<11} not found")
             continue
         r = check_known(texts[ref], model, **opts)
+        save_result(ref, model, r)
         print(f"  {ref:<11} {describe(r)[:220]}")
         if show:
             if r.get("why"):

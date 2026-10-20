@@ -305,3 +305,8 @@ def test_format_times_lists_each_step_and_total():
     t["b"] = 2.0
     out = loop.format_times(t)
     assert out.startswith("time a ") and "b 2s" in out and "total" in out
+
+
+def test_format_times_shows_parts_in_brackets_and_does_not_double_count():
+    out = loop.format_times({"check": 10.0, "known": 100.0, "known.search": 4.0, "known.llm": 96.0})
+    assert "known 100s (search 4s, llm 96s)" in out and "(total 110s)" in out

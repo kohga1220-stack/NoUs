@@ -357,8 +357,17 @@ def _timed(times: dict, name: str, fn, *args):
 
 
 def format_times(times: dict) -> str:
-    total = sum(times.values())
-    return "time " + ", ".join(f"{k} {v:.0f}s" for k, v in times.items()) + f" (total {total:.0f}s)"
+    """'time collect 1s, check 31s, known 115s (search 4s, llm 110s) (total ...)'. A key like
+    'known.llm' is a part of 'known': shown in brackets, not added to the total."""
+    total = sum(v for k, v in times.items() if "." not in k)
+    parts = []
+    for k, v in times.items():
+        if "." in k:
+            continue
+        sub = ", ".join(f"{sk.split('.', 1)[1]} {sv:.0f}s" for sk, sv in times.items()
+                        if sk.startswith(k + "."))
+        parts.append(f"{k} {v:.0f}s" + (f" ({sub})" if sub else ""))
+    return "time " + ", ".join(parts) + f" (total {total:.0f}s)"
 
 
 def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
@@ -407,7 +416,10 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
             accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff(),
                                       rec["composite"], floor)
         if accepted and steps.known:
-            accepted, reason = apply_known(_timed(times, "known", steps.known, rec["hyp_ref"]), reason)
+            known = _timed(times, "known", steps.known, rec["hyp_ref"])
+            for k, v in (known.get("timing") or {}).items():
+                times[f"known.{k}"] = v
+            accepted, reason = apply_known(known, reason)
         rec["status"], rec["reason"] = ("accepted" if accepted else "rejected"), reason
         rec["reward"] = reward_for(accepted, rec["composite"])
         if accepted:

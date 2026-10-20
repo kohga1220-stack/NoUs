@@ -140,3 +140,9 @@ def test_yaml_and_links_are_safe():
 
 def test_multiline_hypothesis_stays_inside_the_blockquote():
     assert vault.quote("a\nb") == "> a\n> b"
+
+
+def test_export_reports_what_is_on_disk(db, tmp_path):
+    out, st = _export(db, tmp_path)
+    assert st["missing"] == [] and st["folders"]["論文"] == 3 and st["folders"]["灰"] == 2
+    assert st["folders"]["仮説"] == 1 and st["folders"]["実行履歴.md"] == 1 and "善見天（浄土の目次）" in st["front_page"]

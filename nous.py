@@ -284,6 +284,11 @@ def cmd_vault(args: list[str]):
     st = vault.export(out=out, force="--force" in args)
     print(f"浄土 → {st['out']}\n  notes {st['notes']} (written {st['written']}, unchanged {st['unchanged']}, "
           f"removed {st['removed']}); hypotheses {st['hypotheses']}")
+    print("  folders: " + ", ".join(f"{k} {v}" for k, v in st["folders"].items()))
+    print(f"  on disk: {st['notes'] - len(st['missing'])}/{st['notes']} notes present"
+          + (f"; MISSING e.g. {st['missing'][:3]}" if st["missing"] else ""))
+    print("\n--- 善見天/目次.md (first 30 lines) ---")
+    print("\n".join(st["front_page"].splitlines()[:30]))
     if st["kept_stale"]:
         print(f"  NOTE: {st['kept_stale']} older notes were kept: this export is much smaller than the last. "
               "Use --force if that is intended.")

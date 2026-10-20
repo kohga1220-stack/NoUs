@@ -530,5 +530,12 @@ def export(out=None, db_path=None, force: bool = False, now: str | None = None) 
     d = collect(db_path or DB_PATH)
     files = build(d, now)
     stats = write_vault(out, files, now, force=force)
-    stats.update(out=str(out), notes=len(files), hypotheses=len(d["hyps"]), db_bytes=d["db_bytes"])
+    folders: dict[str, int] = {}
+    for rel in files:
+        top = rel.split("/", 1)[0] if "/" in rel else rel
+        folders[top] = folders.get(top, 0) + 1
+    # check from this side that the notes are on the (possibly Drive-mounted) disk
+    missing = [rel for rel in files if not (out / rel).exists()]
+    stats.update(out=str(out), notes=len(files), hypotheses=len(d["hyps"]), db_bytes=d["db_bytes"],
+                 folders=folders, missing=missing, front_page=files.get(FRONT_PAGE, ""))
     return stats

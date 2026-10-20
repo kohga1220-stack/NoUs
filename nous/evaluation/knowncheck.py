@@ -18,6 +18,7 @@ rejects. Cost: one OpenAlex semantic search + one LLM call per hypothesis.
 Usage:  python nous.py knowncheck [--model M] [--n N] [--no-rewrite] [--strict] [--show] [--controls | --negatives | --accepted [--retract] | hyp:26 ...]
 """
 from __future__ import annotations
+import time
 import re
 
 from nous.config import DEFAULT_MODEL
@@ -164,6 +165,14 @@ def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
     from nous.evaluation.combination import claim_text
     claim = claim_text(text)
     empty = {"work": None, "title": None, "year": None, "works": []}
+    timing = {"search": 0.0, "llm": 0.0}          # seconds; shown after the cycle's `known` time
+
+    def timed(key, fn, *a, **kw):
+        t0 = time.monotonic()
+        try:
+            return fn(*a, **kw)
+        finally:
+            timing[key] += time.monotonic() - t0
     try:
         if search is None:
             from nous.evaluation.literature import search_prior_work as search
@@ -172,6 +181,9 @@ def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
 
             def ask(prompt, model):
                 return generate_json(prompt, model=model, num_ctx=NUM_CTX)
+        raw_search, raw_ask = search, ask
+        search = lambda *a, **kw: timed("search", raw_search, *a, **kw)
+        ask = lambda *a, **kw: timed("llm", raw_ask, *a, **kw)
         works = search(claim, n=n)
     except Exception as ex:
         return {"verdict": "unknown", "evidence": f"search failed: {type(ex).__name__}", **empty}
@@ -192,6 +204,7 @@ def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
                 **{**empty, "works": titles}}
     res = parse_verdict(data, works)
     res["works"] = titles
+    res["timing"] = timing
     if confirm and res["verdict"] == "established":
         try:
             same = (ask(build_confirm_prompt(claim, res["title"], res["evidence"]), model=model) or {}).get("same")
@@ -200,6 +213,7 @@ def check_known(text: str, model: str = DEFAULT_KNOWN_MODEL, n: int = N_WORKS,
         if same is not True:
             res.update(verdict="related", evidence="the quote was not confirmed as the same claim"
                        if same is False else "second check unavailable; not rejecting")
+    res["timing"] = {k: round(v, 1) for k, v in timing.items()}
     return res
 
 

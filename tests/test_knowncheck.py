@@ -287,3 +287,10 @@ def test_default_known_model_prefers_the_local_model_then_gemini_then_off(monkey
     assert kc.default_known_model() == kc.DEFAULT_KNOWN_MODEL            # Ollama not running
     _fake_ollama(monkeypatch, ["gemma4:12b"])
     assert kc.default_known_model() == "gemma4:12b"                      # the local model wins over Gemini
+
+
+def test_check_known_reports_search_and_llm_seconds():
+    res = kc.check_known("A claim long enough to be searched for in the literature.", "m",
+                         search=lambda q, n=10: [{"title": "T", "year": 2000, "text": "x", "id": "W1"}],
+                         ask=lambda p, model: {"verdict": "related", "why": "w"})
+    assert set(res["timing"]) == {"search", "llm"} and all(v >= 0 for v in res["timing"].values())

@@ -5,14 +5,20 @@ import textwrap
 
 import pytest
 
-NB = pathlib.Path(__file__).parent.parent / "notebooks" / "nous_colab.ipynb"
+NB_DIR = pathlib.Path(__file__).parent.parent / "notebooks"
+NBS = [NB_DIR / "nous_colab.ipynb", NB_DIR / "nous_colab_manual.ipynb"]      # the one-cell copy, then the step-4 copy
+
+
+def _cells():
+    for nb in NBS:
+        yield from json.loads(nb.read_text(encoding="utf-8"))["cells"]
 TOKEN = "ghp_TESTTOKEN1234567890"
 
 
 def _helper_sources():
     """The git()/git_auto() helper as written in each notebook cell that has one (dedented)."""
     out = []
-    for c in json.loads(NB.read_text(encoding="utf-8"))["cells"]:
+    for c in _cells():
         s = "".join(c["source"])
         if c["cell_type"] == "code" and "def git(" in s:
             start = s.index("def git(")
@@ -53,7 +59,7 @@ def _run(src, monkeypatch, behaviour):
 
 def test_notebook_has_the_helper_in_both_places_and_imports_what_it_uses():
     assert len(_helper_sources()) == 2
-    for c in json.loads(NB.read_text(encoding="utf-8"))["cells"]:
+    for c in _cells():
         s = "".join(c["source"])
         if c["cell_type"] == "code" and "def git(" in s:
             assert s.index("import base64") < s.index("def git(")

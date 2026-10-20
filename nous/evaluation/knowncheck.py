@@ -52,15 +52,9 @@ def default_known_model() -> str | None:
     """The model used when none is given: the local gemma4:12b if Ollama has it (free), else Gemini
     if GEMINI_API_KEY is set, else None (the check is off)."""
     import os
-    try:
-        import ollama
-        res = ollama.list()
-        models = res["models"] if isinstance(res, dict) else getattr(res, "models", [])
-        names = {(m["model"] if isinstance(m, dict) else getattr(m, "model", "")) for m in models}
-        if LOCAL_KNOWN_MODEL in names:
-            return LOCAL_KNOWN_MODEL
-    except Exception:
-        pass
+    from nous.llm import ollama_models
+    if LOCAL_KNOWN_MODEL in (ollama_models() or set()):
+        return LOCAL_KNOWN_MODEL
     return DEFAULT_KNOWN_MODEL if os.environ.get("GEMINI_API_KEY") else None
 
 

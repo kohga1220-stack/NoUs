@@ -217,3 +217,31 @@ def check_models(models: list[str], gen=None) -> list[dict]:
             out.append({"model": m, "ok": False, "seconds": time.time() - t0,
                         "detail": mask(f"{type(ex).__name__}: {str(ex)[:200]}")})
     return out
+
+
+def ollama_models() -> set[str] | None:
+    """Names of the models Ollama has pulled, or None if Ollama cannot be asked."""
+    try:
+        import ollama
+        res = ollama.list()
+        models = res["models"] if isinstance(res, dict) else getattr(res, "models", [])
+        return {(m["model"] if isinstance(m, dict) else getattr(m, "model", "")) for m in models}
+    except Exception:
+        return None
+
+
+def missing_local_models(models: list[str | None]) -> list[str]:
+    """The given models that are served by Ollama (no provider prefix, or `ollama:`) but not pulled.
+    Empty when Ollama cannot be asked (the real call then reports its own error)."""
+    have = ollama_models()
+    if have is None:
+        return []
+    out = []
+    for m in dict.fromkeys(x for x in models if x):
+        head, _, rest = m.partition(":")
+        name = rest if head == "ollama" and rest else m
+        if head in ("opencode", "gemini") and rest:
+            continue
+        if name not in have and (":" in name or f"{name}:latest" not in have):
+            out.append(name)
+    return out

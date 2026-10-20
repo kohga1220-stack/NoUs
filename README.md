@@ -93,6 +93,7 @@ python nous.py migrate-domains     # 旧ドメイン名（physics 等）を Open
 python nous.py autoloop --plan            # 次に探索する分野ペアと指標を表示（API 呼び出しなし）。--min-shared N
 python nous.py autoloop 1 --gen-model M   # 仮説の生成だけ別の（大きい）Ollamaモデルで行う（評価・概念分解は既定モデルのまま）
 python nous.py autoloop 3                 # 3サイクル：Voidペア → 橋渡し論文収集 → 仮説 → 評価 → 文献チェック → 採否
+python nous.py autoloop 3 --fast          # 先に文献・組合せチェックをし、棄却が決まった仮説は評価（judge）を省く（T4 で1サイクルの約半分が judge）。composite が付かない仮説が増える
 python nous.py autoloop --report          # 実行履歴
 python nous.py autoloop --retract hyp:27 [理由]   # 採用したあとに既知の内容だと分かった仮説を取り消す（記録は残し、知識ベースから外し、以後の同期にも戻さない）
 python nous.py knowncheck --controls            # 有名な10例を、近い論文を読んだ LLM（既定 Gemini）が「既知」と判定できるか確かめる

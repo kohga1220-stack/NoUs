@@ -229,3 +229,13 @@ def test_known_check_asks_ollama_for_a_long_enough_context(monkeypatch):
     works = [{"work_id": "W", "title": "T", "year": 1, "text": "T. abstract"}]
     r = kc.check_known("claim", "gemma4:e2b", search=lambda t, n: works, rewrite=False, confirm=False)
     assert r["verdict"] == "not_found" and seen[0]["options"] == {"num_ctx": kc.NUM_CTX}
+
+
+def test_missing_local_models_lists_only_unpulled_ollama_models(monkeypatch):
+    from nous import llm
+    monkeypatch.setattr(llm, "ollama_models", lambda: {"gemma4:e2b", "gemma4:12b", "llama3:latest"})
+    assert llm.missing_local_models(["gemma4:e2b", "gemma4:31b", None, "gemma4:31b"]) == ["gemma4:31b"]
+    assert llm.missing_local_models(["ollama:gemma4:12b", "gemini:gemini-3.6-flash", "opencode:x"]) == []
+    assert llm.missing_local_models(["llama3"]) == []                  # bare name resolves to :latest
+    monkeypatch.setattr(llm, "ollama_models", lambda: None)            # Ollama not running: no guard
+    assert llm.missing_local_models(["gemma4:31b"]) == []

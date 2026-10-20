@@ -38,6 +38,7 @@ Usage:
   Autonomous loop (needs OPENALEX_API_KEY and Ollama)
     python nous.py autoloop [cycles] [--per-pair N] [--abstract]   # void pair -> hypothesis -> checks -> accept/reject
     python nous.py autoloop 1 --gen-model M   # write the hypothesis with a different (e.g. larger) Ollama model
+    python nous.py autoloop 3 --fast          # literature checks first; skip the rubric judging of hypotheses rejected anyway
     python nous.py autoloop --plan     # which field pairs would be explored next (no API calls); --min-shared N
     python nous.py autoloop --report   # log of past loop runs
     python nous.py autoloop 1 --known-model M   # known-work check (default: local gemma4:12b if pulled, else Gemini if GEMINI_API_KEY is set; "none" = off)
@@ -242,10 +243,16 @@ def cmd_autoloop(args: list[str]):
         print("(known-work check is off: pull gemma4:12b, set GEMINI_API_KEY, or pass --known-model M)")
     else:
         print(f"(known-work check: {known_model})")
+    from nous.llm import missing_local_models
+    missing = missing_local_models([DEFAULT_MODEL, gen_model, known_model])
+    if missing:
+        print("Not pulled in Ollama: " + ", ".join(missing) +
+              "\n  -> run `ollama pull <model>` first (or pick another model). Nothing was run.")
+        sys.exit(1)
     rest = [a for a in args if not a.startswith("--")]
     loop.autoloop(cycles=int(rest[0]) if rest else 1, per_pair=per_pair,
                   abstract="--abstract" in args, min_shared=min_shared, gen_model=gen_model,
-                  known_model=known_model)
+                  known_model=known_model, fast="--fast" in args)
 
 
 def cmd_knowncheck(args: list[str]):

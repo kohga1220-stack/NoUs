@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 
 from nous import loop
@@ -128,14 +130,49 @@ def test_cycle_accepts_and_syncs_only_accepted(env, capsys):
     assert len(loop.load_history()) == 2
 
 
-def test_cycle_logs_errors_and_does_not_retry_same_pair(env):
+def test_errored_cycle_is_logged_but_does_not_use_up_the_pair(env):
     steps, _ = _steps(fail="generate")
     rec = loop.run_cycle(steps, verbose=False)
     assert rec["status"] == "error" and "ollama down" in rec["reason"]
-    first = {loop.load_history()[0]["field_a"], loop.load_history()[0]["field_b"]}
+    assert loop.load_history() == []                                  # no hypothesis: pair not "tried"
+    first = (rec["field_a"], rec["field_b"])
+    # within one run the failed pair is not picked again ...
     steps, _ = _steps()
-    rec = loop.run_cycle(steps, verbose=False)
-    assert {rec["field_a"], rec["field_b"]} != first                # moved on to another pair
+    again = loop.run_cycle(steps, verbose=False, errored=[first])
+    assert (again["field_a"], again["field_b"]) != first
+    # ... but a later run may retry it
+    assert loop.run_cycle(_steps()[0], verbose=False)["field_a"] == first[0]
+
+
+def test_autoloop_does_not_repeat_an_errored_pair_within_the_run(env, monkeypatch):
+    seen = []
+    real = loop.run_cycle
+
+    def spy(steps, **kw):
+        r = real(steps, **kw)
+        seen.append((r["field_a"], r["field_b"]))
+        return r
+
+    monkeypatch.setattr(loop, "run_cycle", spy)
+    monkeypatch.setattr(loop, "default_steps", lambda **kw: _steps(fail="generate")[0])
+    loop.autoloop(cycles=3, verbose=False)
+    assert len(set(seen)) == 3
+
+
+def test_fast_cycle_skips_judging_for_a_hypothesis_that_is_rejected_anyway(env):
+    judged = []
+    steps, _ = _steps(label="studied")
+    steps = dataclasses.replace(steps, judge=lambda ref: judged.append(ref) or 4.0)
+    rec = loop.run_cycle(steps, verbose=False, fast=True)
+    assert rec["status"] == "rejected" and rec["composite"] is None and judged == []
+    steps, _ = _steps(label="unexplored")
+    steps = dataclasses.replace(steps, judge=lambda ref: judged.append(ref) or 4.0)
+    rec = loop.run_cycle(steps, verbose=False, fast=True)
+    assert rec["status"] == "accepted" and rec["composite"] == 4.0 and judged == ["hyp:7"]
+    steps, _ = _steps(label="unexplored", composite=2.0)
+    steps = dataclasses.replace(steps, floor=lambda: 3.28)
+    rec = loop.run_cycle(steps, verbose=False, fast=True)
+    assert rec["status"] == "rejected" and "below the median" in rec["reason"]
 
 
 def test_cycle_stops_when_no_pair_is_left(env):

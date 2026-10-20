@@ -293,9 +293,11 @@ def default_steps(model: str = DEFAULT_MODEL, abstract: bool = False,
 
     def known(ref):
         from nous.evaluation import store
-        from nous.evaluation.knowncheck import check_known
+        from nous.evaluation.knowncheck import check_known, save_result
         text = next((t["text"] for t in store.load_targets() if t["ref"] == ref), "")
-        return check_known(text, known_model)
+        res = check_known(text, known_model)
+        save_result(ref, known_model, res)
+        return res
 
     return Steps(collect, index, generate, judge, check, cutoff, sync, describe_ref, floor,
                  known if known_model else None)

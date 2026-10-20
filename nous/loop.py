@@ -198,7 +198,9 @@ def load_history() -> list[dict]:
     conn = sqlite3.connect(DB_PATH)
     try:
         _ensure_table(conn)
-        rows = conn.execute("SELECT field_a, field_b, reward FROM loop_runs").fetchall()
+        # an errored cycle made no hypothesis, so its pair is not "tried" (retry it next time)
+        rows = conn.execute("SELECT field_a, field_b, reward FROM loop_runs "
+                            "WHERE status != 'error'").fetchall()
     finally:
         conn.close()
     return [{"field_a": a, "field_b": b, "reward": r} for a, b, r in rows]
@@ -360,9 +362,14 @@ def format_times(times: dict) -> str:
 
 
 def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
-              min_shared: int = MIN_SHARED) -> dict | None:
+              min_shared: int = MIN_SHARED, errored: list | None = None,
+              fast: bool = False) -> dict | None:
+    """One cycle. `errored`: (field_a, field_b) pairs that already failed in this run (not retried
+    within it). `fast`: check the literature first and skip the (slow) rubric judging of a
+    hypothesis that is rejected anyway."""
     from nous.collector.openalex import load_field_links
-    link = choose_pair(load_field_links(), load_history(), min_shared=min_shared)
+    history = load_history() + [{"field_a": a, "field_b": b, "reward": 0.0} for a, b in (errored or [])]
+    link = choose_pair(load_field_links(), history, min_shared=min_shared)
     if link is None:
         if verbose:
             print("No untried field pair left (or no field links yet: run 'nous.py voids --refresh').")
@@ -385,11 +392,20 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
         if hid is None:
             raise RuntimeError("hypothesis was not saved")
         rec["hyp_ref"] = f"hyp:{hid}"
-        rec["composite"] = _timed(times, "judge", steps.judge, rec["hyp_ref"])
-        rec["combo_label"], rec["lit_novelty"] = _timed(times, "check", steps.check, rec["hyp_ref"])
         floor = steps.floor() if steps.floor else None
-        accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff(),
-                                  rec["composite"], floor)
+        if fast:
+            rec["composite"] = None
+            rec["combo_label"], rec["lit_novelty"] = _timed(times, "check", steps.check, rec["hyp_ref"])
+            accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff())
+            if accepted:                       # only a survivor is worth the judging time
+                rec["composite"] = _timed(times, "judge", steps.judge, rec["hyp_ref"])
+                accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff(),
+                                          rec["composite"], floor)
+        else:
+            rec["composite"] = _timed(times, "judge", steps.judge, rec["hyp_ref"])
+            rec["combo_label"], rec["lit_novelty"] = _timed(times, "check", steps.check, rec["hyp_ref"])
+            accepted, reason = decide(rec["combo_label"], rec["lit_novelty"], steps.cutoff(),
+                                      rec["composite"], floor)
         if accepted and steps.known:
             accepted, reason = apply_known(_timed(times, "known", steps.known, rec["hyp_ref"]), reason)
         rec["status"], rec["reason"] = ("accepted" if accepted else "rejected"), reason
@@ -414,13 +430,17 @@ def run_cycle(steps: Steps, per_pair: int = 10, verbose: bool = True,
 
 def autoloop(cycles: int = 1, per_pair: int = 10, model: str = DEFAULT_MODEL,
              abstract: bool = False, verbose: bool = True, min_shared: int = MIN_SHARED,
-             gen_model: str | None = None, known_model: str | None = None) -> list[dict]:
+             gen_model: str | None = None, known_model: str | None = None,
+             fast: bool = False) -> list[dict]:
     steps = default_steps(model=model, abstract=abstract, gen_model=gen_model, known_model=known_model)
-    out = []
+    out, errored = [], []
     for _ in range(cycles):
-        rec = run_cycle(steps, per_pair=per_pair, verbose=verbose, min_shared=min_shared)
+        rec = run_cycle(steps, per_pair=per_pair, verbose=verbose, min_shared=min_shared,
+                        errored=errored, fast=fast)
         if rec is None:
             break
+        if rec["status"] == "error":
+            errored.append((rec["field_a"], rec["field_b"]))
         out.append(rec)
     if verbose and out:
         acc = sum(1 for r in out if r["status"] == "accepted")

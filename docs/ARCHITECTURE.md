@@ -24,7 +24,7 @@ flowchart LR
         HYP["hypothesis<br/>仮説生成"]
     end
     subgraph AGENTS["scepter/ と core.py"]
-        SC["5 Scepter<br/>H S N A I"]
+        SC["評議会<br/>分野 Scepter 10 + 検査係 10<br/>（親 5: H S N A I は審査員）"]
         NOUS["NOUS 統合<br/>討論と判定"]
     end
     subgraph EVAL["evaluation/"]

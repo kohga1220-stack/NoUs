@@ -3,9 +3,10 @@ NOUS Core — the central orchestrator.
 
 Workflow for a 'debate' session:
   1. Retrieve cross-domain context from ChromaDB
-  2. Activate relevant Scepters (all by default, or selected)
-  3. Each Scepter generates its domain-specific hypothesis (sequentially)
-  4. Each Scepter critiques every other Scepter's hypothesis
+  2. Activate the council: 10 field Scepters (generators) + 10 role auditors
+  3. Each field Scepter generates its domain-specific hypothesis (sequentially)
+  4. Each auditor checks the top-k hypotheses (by confidence) on its one question.
+     (`classic`: the 5 parent Scepters critique every other one, all pairs.)
   5. NOUS Core synthesizes: weighs evidence, resolves conflicts, issues verdict
   6. Save everything to SQLite memory
 """
@@ -16,9 +17,10 @@ import sqlite3
 from nous.config import DB_PATH, DEFAULT_MODEL
 from nous.engine.connector import find_cross_domain_connections
 from nous.llm import generate_json
-from nous.scepter.registry import ALL_SCEPTERS, Scepter
+from nous.scepter.registry import ALL_SCEPTERS, AUDITORS, FIELD_SCEPTERS, Scepter
 
 LINK_SYMBOLS = {"supports": "✓", "contradicts": "✗", "extends": "+"}
+TOP_K = 3   # hypotheses each auditor reviews
 
 
 # ------------------------------------------------------------------ #
@@ -105,6 +107,7 @@ def _synthesize(query: str, hypotheses: list[dict],
     crit_text = "\n".join(
         f"  {cr['from_scepter']} {LINK_SYMBOLS.get(cr['link_type'],'?')} "
         f"{cr['to_scepter']}: {cr.get('rationale','')}"
+        + (f" [challenge: {cr['challenge']}]" if cr.get("challenge") and cr.get("link_type") == "contradicts" else "")
         for cr in critiques
     )
 
@@ -115,7 +118,7 @@ QUERY: {query}
 SCEPTER HYPOTHESES:
 {hyp_text}
 
-SCEPTER CRITIQUES (how Scepters evaluated each other):
+REVIEWS (✓ supports / passes, ✗ contradicts / fails, + extends / passes with a change):
 {crit_text}
 
 Your task as NOUS:
@@ -141,6 +144,17 @@ Respond ONLY with JSON:
         return {"verdict": f"[synthesis error: {ex}]", "confidence": 0.0}
 
 
+def select_for_audit(hypotheses: list[dict], k: int = TOP_K) -> list[dict]:
+    """The k most confident usable hypotheses (ties keep generation order)."""
+    def conf(h: dict) -> float:
+        try:
+            return float(h.get("confidence", 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    usable = [h for h in hypotheses if not str(h.get("hypothesis", "")).startswith("[parse error")]
+    return sorted(usable, key=lambda h: -conf(h))[:max(k, 0)]
+
+
 def previous_debates(query: str) -> list[int]:
     """Ids of earlier debates with exactly the same question (case/space-insensitive)."""
     _ensure_debate_tables()
@@ -162,13 +176,20 @@ def debate(
     scepters: list[Scepter] | None = None,
     model: str = DEFAULT_MODEL,
     verbose: bool = True,
+    auditors: list | None = None,
+    top_k: int = TOP_K,
+    classic: bool = False,
 ) -> dict:
     """
     Run a full NOUS debate session on a query.
 
     Args:
         query:    The concept or question to investigate.
-        scepters: Which Scepters to activate (default: all 5).
+        scepters: Generators to activate (default: the 10 field Scepters).
+        auditors: Role auditors (default: all 10 when `scepters` is not given, else none).
+                  With no auditors, the generators critique each other (all pairs).
+        top_k:    Hypotheses each auditor reviews (the most confident ones).
+        classic:  The original debate: the 5 parent Scepters, all-pairs critique.
         model:    Ollama model to use for all agents (Scepters and NOUS).
         verbose:  Print progress to stdout.
 
@@ -176,10 +197,16 @@ def debate(
         Full debate result dict.
     """
     _ensure_debate_tables()
-    if scepters is None:
-        scepters = ALL_SCEPTERS
+    if classic:
+        scepters, auditors = ALL_SCEPTERS, []
+    elif scepters is None:
+        scepters = FIELD_SCEPTERS
+        if auditors is None:
+            auditors = AUDITORS
+    auditors = auditors or []
     # Re-instantiate so every agent in this session uses the requested model
     scepters = [type(s)(model=model) for s in scepters]
+    auditors = [type(a)(model=model) for a in auditors]
 
     if verbose:
         print(f"\n{'='*60}")
@@ -203,20 +230,34 @@ def debate(
             hyp_short = h.get("hypothesis", "")[:100]
             print(f"         → {hyp_short}... (conf={conf})")
 
-    # Step 3: each Scepter critiques every other
-    if verbose:
-        print(f"\n[NOUS] Running inter-Scepter critique ({len(scepters)*(len(scepters)-1)} pairs)...")
+    # Step 3: review. Auditors check the top-k hypotheses; without auditors, all-pairs critique.
     critiques: list[dict] = []
-    for i, scepter in enumerate(scepters):
-        for j, other_hyp in enumerate(hypotheses):
-            if i == j:
-                continue
-            cr = scepter.critique(hypotheses[i], other_hyp)
-            critiques.append(cr)
-            if verbose:
-                sym = LINK_SYMBOLS.get(cr.get("link_type", ""), "?")
-                print(f"  {cr['from_scepter']} {sym} {cr['to_scepter']}: "
-                      f"{cr.get('rationale','')[:80]}")
+    if auditors:
+        targets = select_for_audit(hypotheses, top_k)
+        if verbose:
+            print(f"\n[NOUS] {len(auditors)} auditors review {len(targets)} hypotheses "
+                  f"({len(auditors) * len(targets)} reviews)...")
+        for auditor in auditors:
+            for target in targets:
+                cr = auditor.review(target)
+                critiques.append(cr)
+                if verbose:
+                    sym = LINK_SYMBOLS.get(cr.get("link_type", ""), "?")
+                    print(f"  {cr['from_scepter']} {sym} {cr['to_scepter']}: "
+                          f"{cr.get('rationale','')[:80]}")
+    else:
+        if verbose:
+            print(f"\n[NOUS] Running inter-Scepter critique ({len(scepters)*(len(scepters)-1)} pairs)...")
+        for i, scepter in enumerate(scepters):
+            for j, other_hyp in enumerate(hypotheses):
+                if i == j:
+                    continue
+                cr = scepter.critique(hypotheses[i], other_hyp)
+                critiques.append(cr)
+                if verbose:
+                    sym = LINK_SYMBOLS.get(cr.get("link_type", ""), "?")
+                    print(f"  {cr['from_scepter']} {sym} {cr['to_scepter']}: "
+                          f"{cr.get('rationale','')[:80]}")
 
     # Step 4: NOUS synthesizes
     if verbose:

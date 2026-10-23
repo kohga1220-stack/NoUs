@@ -35,6 +35,33 @@ SCEPTER_COLORS = {
 }
 
 
+def scepter_color(name: str) -> str:
+    """Colour of any council member: parents as above, field Scepters as lighter/darker
+    variants of their parent's colour, auditors in a pale blue-grey family."""
+    import colorsys
+    from nous.domains import FIELD_GROUPS
+    if name in SCEPTER_COLORS:
+        return SCEPTER_COLORS[name]
+    for child, parent, _fields in FIELD_GROUPS:
+        if child == name:
+            same = [c for c, p, _f in FIELD_GROUPS if p == parent]
+            i, n = same.index(name), len(same)
+            base = SCEPTER_COLORS[parent].lstrip("#")
+            r, g, b = (int(base[k:k + 2], 16) / 255 for k in (0, 2, 4))
+            h, l, sat = colorsys.rgb_to_hls(r, g, b)
+            h = (h + 0.02 * (i + 1)) % 1          # a small hue shift keeps a child from equalling its parent
+            l = min(0.78, max(0.28, l + (i - (n - 1) / 2) * 0.12))
+            r, g, b = colorsys.hls_to_rgb(h, l, sat)
+            return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+    if name.startswith("Auditor-"):
+        from nous.scepter.registry import AUDITORS
+        names = [a.name for a in AUDITORS]
+        i = names.index(name) if name in names else 0
+        r, g, b = colorsys.hls_to_rgb((0.55 + 0.03 * i) % 1, 0.80, 0.30)
+        return "#%02x%02x%02x" % (round(r * 255), round(g * 255), round(b * 255))
+    return DEFAULT_COLOR
+
+
 def domain_color(domain: str) -> str:
     from nous.domains import scepter_for
     return DOMAIN_COLORS.get(domain) or SCEPTER_COLORS.get(scepter_for(domain), DEFAULT_COLOR)

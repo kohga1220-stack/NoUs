@@ -7,8 +7,11 @@ Each Scepter holds deep expertise in its academic field and can:
 from __future__ import annotations
 
 from nous.config import DEFAULT_MODEL
-from nous.domains import domains_for, scepter_for
+from nous.domains import DOMAIN_TO_SCEPTER, FIELD_GROUPS, domains_for, field_scepter_for, scepter_for
 from nous.llm import generate_json
+
+
+_FIELD_NAMES = {name for name, _parent, _fields in FIELD_GROUPS}
 
 
 class Scepter:
@@ -23,13 +26,18 @@ class Scepter:
     @property
     def collector_domains(self) -> list[str]:
         """Knowledge-base domains (physics, psychology, ...) owned by this Scepter."""
+        if self.name in _FIELD_NAMES:
+            return sorted(d for d in DOMAIN_TO_SCEPTER if field_scepter_for(d) == self.name)
         return domains_for(self.name)
+
+    def _owns(self, domain: str) -> bool:
+        owner = field_scepter_for(domain) if self.name in _FIELD_NAMES else scepter_for(domain)
+        return owner == self.name
 
     def _format_context(self, context: list[dict], limit: int = 8) -> str:
         lines = []
         for r in context[:limit]:
-            owner = scepter_for(r["domain"])
-            tag = " (your field)" if owner == self.name else ""
+            tag = " (your field)" if self._owns(r["domain"]) else ""
             lines.append(f"- [{r['domain']}{tag}] {r['title']}: {r.get('summary','')[:150]}")
         return "\n".join(lines)
 
@@ -133,6 +141,57 @@ Respond ONLY with JSON:
         except Exception as ex:
             return {
                 "from_scepter": self.name, "to_scepter": other.get("scepter", "?"),
+                "link_type": "extends", "strength": 0.5,
+                "rationale": f"[parse error: {ex}]",
+            }
+
+
+class Auditor:
+    """
+    A role-based Scepter: it generates nothing, it checks one aspect (prior art, triviality,
+    measurability, ...) of a hypothesis. Its reply is saved in the same shape as a Scepter
+    critique, so `scepter_critiques` and the synthesis need no new format:
+      supports    = passes this check
+      contradicts = fails this check (a serious flaw)
+      extends     = passes, but needs a specific change
+    """
+    name: str          # e.g. "Auditor-PriorArt"
+    domain: str        # short role label, e.g. "Prior art"
+    role: str          # one-sentence description of what it checks
+    question: str      # the single question it answers about a hypothesis
+
+    def __init__(self, model: str = DEFAULT_MODEL):
+        self.model = model
+
+    def review(self, target: dict) -> dict:
+        prompt = f"""You are {self.name}, the {self.domain} auditor of NOUS.
+Your role: {self.role}
+Your single question: {self.question}
+
+HYPOTHESIS ({target.get('scepter','?')} — {target.get('domain','?')}):
+{target.get('hypothesis', '')}
+Claimed test: {target.get('validation_question', '')}
+
+Judge ONLY the question above. Do not praise or criticise anything else.
+- "supports":    the hypothesis passes your check
+- "contradicts": it fails your check (a serious flaw)
+- "extends":     it passes, but one specific change would be needed
+
+Respond ONLY with JSON:
+{{
+  "link_type": "supports" | "contradicts" | "extends",
+  "strength": 0.0-1.0,
+  "rationale": "One sentence: your answer to the question",
+  "challenge": "Optional: the one concrete change or check that would settle it"
+}}"""
+        try:
+            result = generate_json(prompt, model=self.model)
+            result["from_scepter"] = self.name
+            result["to_scepter"] = target.get("scepter", "?")
+            return result
+        except Exception as ex:
+            return {
+                "from_scepter": self.name, "to_scepter": target.get("scepter", "?"),
                 "link_type": "extends", "strength": 0.5,
                 "rationale": f"[parse error: {ex}]",
             }

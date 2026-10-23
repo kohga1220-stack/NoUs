@@ -12,7 +12,7 @@ Usage:
     python nous.py link                # Auto-analyze & store links between all hypotheses
     python nous.py network             # Show the hypothesis relationship network
     python nous.py sync                # Sync hypotheses back into knowledge base
-    python nous.py debate "concept"    # Run full 5-Scepter debate + NOUS synthesis (refuses an identical repeated question; --force)
+    python nous.py debate "concept"    # Council debate: 10 field Scepters generate, 10 auditors check the top 3, NOUS synthesizes (--classic: the original 5-Scepter all-pairs debate; refuses an identical repeated question; --force)
     python nous.py debates             # Show recent debate sessions
 
   Structure (domain-free abstractions; requires Ollama)
@@ -157,7 +157,7 @@ def cmd_sync():
     sync_hypotheses_to_chroma()
 
 
-def cmd_debate(query: str, model: str = DEFAULT_MODEL, force: bool = False):
+def cmd_debate(query: str, model: str = DEFAULT_MODEL, force: bool = False, classic: bool = False):
     from nous.core import debate, previous_debates
     prev = previous_debates(query)
     if prev and not force:
@@ -165,7 +165,7 @@ def cmd_debate(query: str, model: str = DEFAULT_MODEL, force: bool = False):
               "Repeating it mostly yields near-duplicate hypotheses; use a different question, "
               "or add --force to run it again.")
         return
-    debate(query, model=model)
+    debate(query, model=model, classic=classic)
 
 
 def cmd_debates():
@@ -388,12 +388,13 @@ def main():
         cmd_sync()
     elif cmd == "debate":
         force = "--force" in args
-        args = [a for a in args if a != "--force"]
+        classic = "--classic" in args
+        args = [a for a in args if a not in ("--force", "--classic")]
         if len(args) < 2:
-            print("Usage: python nous.py debate <concept> [model] [--force]")
+            print("Usage: python nous.py debate <concept> [model] [--force] [--classic]")
             return
         model = args[2] if len(args) > 2 else DEFAULT_MODEL
-        cmd_debate(args[1], model, force)
+        cmd_debate(args[1], model, force, classic)
     elif cmd == "debates":
         cmd_debates()
     elif cmd == "abstract":

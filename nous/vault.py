@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 
 from nous.config import DB_PATH, ROOT_DIR
+from nous.domains import parent_of
 
 # names of the stores, shown on the front page
 NAMES = {"記憶域": "SQLite（data/nous.db）作業用の正本", "憶質": "ChromaDB（意味の索引）"}
@@ -278,6 +279,7 @@ def build(d: dict, now: str) -> dict[str, str]:
         sc = scores.get(ref, {})
         files[f"{DIR_SCEPTER}/scepter-{s['id']}.md"] = (
             frontmatter({"type": "討論の仮説", "ref": ref, "tier": "浄土", "scepter": s.get("scepter"),
+                         "parent": parent_of(s.get("scepter") or ""),
                          "domain": s.get("domain"), "confidence": s.get("confidence"),
                          "composite": sc.get("composite_excl_novelty"), "tags": ["討論の仮説", "浄土"],
                          "aliases": [ref]})

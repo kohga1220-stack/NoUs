@@ -23,7 +23,7 @@ python nous.py embed               # ChromaDB にベクトル索引を構築
 python nous.py query "concept"     # 分野横断検索 [text|graph|both]
 python nous.py graph [threshold]   # 知識グラフ + Bridge / Void 分析
 python nous.py hyp "concept"       # 仮説生成
-python nous.py debate "concept"    # 5 Scepter 討論 + NOUS 統合
+python nous.py debate "concept"    # 評議会: 分野 Scepter 10 が生成 → 検査係 10 が上位3件を点検 → NOUS 統合（--classic: 従来の 5 Scepter 総当たり）
 python nous.py memory | link | network | sync | debates
 ```
 
@@ -128,7 +128,7 @@ python -m nous.evaluation.survey [T]   # 棄却ルール案（最も珍しいペ
 |---|---|
 | `nous/config.py` | パス・既定モデル |
 | `nous/llm.py` | Ollama 呼び出しと JSON 抽出 |
-| `nous/domains.py` | 収集ドメイン（physics 等）→ Scepter の対応表 |
+| `nous/domains.py` | 収集ドメイン（physics 等）→ Scepter の対応表、OpenAlex 26 分野 → 分野 Scepter 10 の `FIELD_GROUPS` |
 | `nous/collector/` | Wikipedia / arXiv 収集 |
 | `nous/engine/` | 埋め込み・分野横断検索・知識グラフ・仮説生成 |
 | `nous/scepter/` | 5 つの分野エージェント（H/S/N/A/I） |
